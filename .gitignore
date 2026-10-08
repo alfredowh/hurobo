@@ -1,0 +1,10 @@
+data/
+assets/*.mp4
+assets/*.npz
+.venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
