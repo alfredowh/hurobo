@@ -1,0 +1,50 @@
+[project]
+name = "ego2robo"
+version = "0.1.0"
+description = "Phone video to robot policy: real2sim retargeting and LIBERO demo generation"
+readme = "README.md"
+authors = [
+    { email = "alfredowijaya@gmail.com" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "lerobot[smolvla,libero,training]>=0.6.1,<0.7",
+  "mediapipe",
+  "opencv-contrib-python>=4.10",
+  "scipy",
+  "matplotlib",
+  # Listed here as direct deps so [tool.uv.sources] below actually routes them
+  # to the cu126 index (lerobot pulls torch/torchvision only transitively,
+  # and a transitive-only reference didn't pick up the source override).
+  "torch",
+  "torchvision",
+]
+
+[project.scripts]
+ego2robo = "ego2robo:main"
+
+[dependency-groups]
+dev = ["ruff", "ipykernel"]
+
+[tool.uv]
+# hf-libero pulls opencv-python; mediapipe pulls opencv-contrib-python. Both install cv2 and clobber each other.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
+# Single-machine project (this laptop only). Without this, uv locks a universal
+# cross-platform resolution; the pytorch cu126 index below has no macOS wheels,
+# so a universal resolve silently falls back to plain PyPI torch (CUDA 13 deps,
+# which this driver can't use) instead of erroring. Restricting to this
+# platform makes the cu126 pin actually take effect.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"   # driver 560.35 is too old for cu128/cu130
+explicit = true
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
