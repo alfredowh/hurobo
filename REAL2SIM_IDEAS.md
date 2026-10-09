@@ -133,6 +133,43 @@ Order of cuts if late: robot overlay → SmolVLA (keep ACT) → data-multiplier 
 
 ---
 
+## 7. Photoreal real2sim with Gaussian splats: deeper survey (Fri 01:50)
+
+**Question:** can the sim's *pixels* come from my real scene (Gaussian splats from phone RGB video), so the policy trains on images close to the real camera's distribution? **Constraints:** phones only (S24, S10e), RGB only, this laptop (RTX A5500 16 GB, **driver 560.35, no upgrade before the deadline**), no physical robot.
+
+**Framing caveat for the README:** this challenge has no real robot, so the "→real" leg can't be measured. What we can honestly claim is *real→sim visual fidelity*: the training images resemble the real phone view. "Real2sim2real" is fine only as the motivation, not as a result.
+
+| Work | Capture | Real robot needed? | Engine | Usable here? |
+|---|---|---|---|---|
+| **PolaRiS** (RSS 2026, arXiv 2512.16881) | 2–5 min **monocular RGB video** + **ChArUco for metric scale**; COLMAP → **2DGS** → TSDF mesh for collision; objects via TRELLIS + SAM2. About 30 min on an RTX 4090. | Robot splat scanned once and reused | Isaac Sim, via `isaaclab==2.3.0` + cu130 torch | **Code: no.** Isaac Lab 2.3 / Isaac Sim 5.x needs driver ≥ 580.65, and this laptop has 560.35. It is also an *evaluation* framework for π0-class DROID policies. **Recipe: yes.** Its capture protocol, ChArUco scale, splat-for-render + mesh-for-collision split, and the finding that ~10% sim co-training data restores real↔sim correlation (r ≈ 0.9) are what we copy. |
+| **DISCOVERSE** (arXiv 2507.21981, MIT) | COLMAP + 3DGS. The paper used a LiDAR scanner and an Artec scanner, but the renderer doesn't care how the `.ply` was made. | No | **MuJoCo** + 3DGS | **Yes, reuse as-is.** Its renderer is a standalone pip package, `gaussian_renderer` (MIT, built on `gsplat`). `GSRendererMuJoCo({body_name: ply}, mj_model)` reads `mjData.xpos/xquat` of named bodies and renders RGB **and depth** from MuJoCo cameras. It needs a raw `MjModel`/`MjData`, which LIBERO's robosuite sim exposes (`sim.model._model`, `sim.data._data`). Reported speed: 240 FPS on an RTX 3060 laptop. Panda is supported. HF assets include `franka_robotiq` splats (Robotiq gripper, not the Panda hand). |
+| **Re3Sim** (arXiv 2502.08645) | 2× RealSense D435i | No (scene) | Isaac Sim | Concept: **hybrid z-buffer compositing**: mesh-rendered foreground plus 3DGS background, merged per pixel by depth. 58% zero-shot sim→real with sim-only data. |
+| **SplatSim** (arXiv 2409.10161) | RGB video incl. robot | Yes (splats the real arm) | PyBullet | Concept: rigid per-object Gaussian transforms. Robot splatting doesn't apply (no real arm). |
+| **RoboGSim** (arXiv 2411.11839) | RGB, objects on a turntable | Yes for the robot splat | Isaac Sim | Concept only. **No code**: the only GitHub repo is the project page (last push Nov 2024, checked Fri 02:00). |
+| **Splatting Physical Scenes** (DeepMind, arXiv 2506.04120) | 4 RGB cams + real ALOHA trajectories | Yes | MuJoCo, differentiable | Too heavy: joint splat+physics optimisation from robot data. Cite as the rigorous version. |
+| **RoboSplat** (RSS 2025, arXiv 2504.13175) | 3DGS of a real demo scene | Yes (real robot demo) | n/a | Concept: generate demos by *editing Gaussians*. Our MimicGen-style generator already covers this. |
+| **RialTo** (RSS 2024) | Scene scan | For RL fine-tuning | Isaac | Different goal (physical robustness via RL), not appearance. |
+
+**Pick: PolaRiS's recipe + DISCOVERSE's renderer + our existing LIBERO/MuJoCo physics.** This combines with LIBERO; it isn't a separate sim.
+- *Keep from LIBERO:* Panda, OSC controller, `libero_goal` task 8's bowl/plate collision meshes, `check_success()`, the LeRobot obs/action format. Everything built tonight stays.
+- *Swap only the pixels:* render the policy camera with splats of **my** table, bowl and plate (rigidly attached to the MuJoCo bodies `table`, `akita_black_bowl_1_main`, `plate_1_main`). Render the robot as the MuJoCo mesh, then composite per pixel by depth (Re3Sim-style), since there's no real arm to splat. Hide LIBERO's stove/cabinet visuals.
+- *Point the policy camera at the real phone's pose* (`SceneTwin` already does this). Training frames then look like my S24 view of my table, with a Panda in it.
+- *Why not a separate sim* (own MuJoCo scene with the menagerie Panda): it would mean rewriting task success, the dataset wrapper and eval for no visual gain. `lerobot-eval` can't be used either way: its LIBERO wrapper renders native textures, so eval needs our own loop over `LiberoTask` + the splat renderer. That loop is small.
+
+**Capture (S24 only, RGB, ~10 min, do it during the 08:00 capture block regardless of the final decision):**
+1. Lay the ChArUco board on the table next to the table ArUco marker. It fixes metric scale and the table frame in the splat, the same way PolaRiS uses it.
+2. Record a 2–3 min slow orbit of the table with the bowl and plate on it. Pro Video, 4K30 or 1080p60, focus/exposure/white balance locked, no motion blur.
+3. Do one short orbit each of the bowl and plate alone, so their Gaussians can be rigid bodies. The fallback is to crop them out of the scene splat by a cylinder around their marker positions.
+4. The S10e isn't needed for the scan.
+
+**Processing (all on this laptop, no system installs):** extract ~200 sharp frames → `pycolmap` SfM (cp312 wheel on PyPI) → `gsplat` training (pure-Python wheel, JIT-compiled against the local `nvcc` 12.6 + torch cu126) → similarity transform from the COLMAP frame to the table frame, from ChArUco detections in the posed frames (this gives the scale) → crop/attach per body → `gaussian_renderer`.
+
+**Verified on this laptop (Fri ~02:10):** `gsplat==1.5.3` JIT-compiles against torch 2.11.0+cu126 / nvcc 12.6 (first call 111 s, then cached), and rasterizes 20k Gaussians at 320×240 at ~2,350 FPS with RGB+depth. `gaussian_renderer.GSRendererMuJoCo` imports. Gotcha: `uv run --with gaussian_renderer` re-resolves torch from PyPI (cu130), the same trap as the first `uv sync`. Add these deps via `pyproject.toml` with the cu126 source pin, never as `--with` overlays. For this test they were installed into `.venv` with `--no-deps`, so the next `uv sync` will remove them.
+
+**RoboGSim vs. DISCOVERSE:** DISCOVERSE wins. Its engine is MuJoCo (= LIBERO's), its code is maintained and MIT, it renders RGB+depth per MuJoCo body, and it reports ACT zero-shot sim→real results (55% vs. SplatSim's 44%). RoboGSim needs Isaac Sim, has no code, and needs a scanned real robot. Cite RoboGSim for the idea.
+
+**Budget vs. the critical path:** roughly 6–8 h of new work (alignment ~2 h, renderer + depth compositing ~3 h, training-loop/eval swap ~2 h). The §6 critical path already fills the waking hours left. **Gate:** do the capture in the morning (cheap insurance). Start building only after the twin-replay MVP passes at 16:00. If no clean composite exists by 20:00, ship it as a README figure ("same frame, LIBERO textures vs. my scene's splats") and list training on it as future work. To make room, cut SmolVLA before cutting this (ACT trains faster).
+
 ## Sources
 - Phantom: [arXiv 2503.00779](https://arxiv.org/abs/2503.00779), [CoRL 2025 / PMLR](https://proceedings.mlr.press/v305/lepert25a.html)
 - Masquerade: [arXiv 2508.09976](https://arxiv.org/abs/2508.09976)
@@ -145,3 +182,7 @@ Order of cuts if late: robot overlay → SmolVLA (keep ACT) → data-multiplier 
 - CMF Watch Pro 2 export limits: [Nothing community: Strava integration](https://nothing.community/d/12851-cmf-watch-pro-2-strava-integration), [improved Strava integration request](https://nothing.community/d/39668-improved-strava-integration-for-cmf-watch), [CMF Watch app third-party sync](https://www.thetechoutlook.com/news/os/cmf-watch-app-gets-a-new-update-with-improved-exercise-data-sync-and-support-for-third-party-apps/), [Galaxus review (not Wear OS)](https://www.galaxus.de/en/page/cmf-watch-pro-2-tested-excellent-smartwatch-but-without-nfc-33840), [GSMArena launch (GNSS)](https://www.gsmarena.com/cmf_watch_pro_2_and_buds_pro_2_announced-news-63611.php)
 - SAM 3D Objects: [arXiv 2511.16624](https://arxiv.org/pdf/2511.16624) · obj2mjcf/CoACD: [github.com/kevinzakka/obj2mjcf](https://github.com/kevinzakka/obj2mjcf)
 - HaMeR: [arXiv 2312.05251](https://arxiv.org/html/2312.05251v1) · WiLoR: [arXiv 2409.12259](https://hyper.ai/en/papers/2409.12259) · FoundationPose: [NVlabs](https://research.nvidia.com/publication/2024-06_foundationpose-unified-6d-pose-estimation-and-tracking-novel-objects.md)
+- PolaRiS: [project](https://polaris-evals.github.io/) · [arXiv 2512.16881](https://arxiv.org/abs/2512.16881) · [code](https://github.com/arhanjain/PolaRiS) · [hub](https://huggingface.co/datasets/owhan/PolaRiS-Hub) · Isaac Sim driver reqs: [5.1](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html), [4.5](https://docs.isaacsim.omniverse.nvidia.com/4.5.0/installation/requirements.html)
+- DISCOVERSE: [arXiv 2507.21981](https://arxiv.org/abs/2507.21981) · [code](https://github.com/TATP-233/DISCOVERSE) · [`gaussian_renderer` on PyPI](https://pypi.org/project/gaussian_renderer/) · [assets](https://huggingface.co/tatp/DISCOVERSE-models)
+- Re3Sim: [arXiv 2502.08645](https://arxiv.org/abs/2502.08645) · SplatSim: [arXiv 2409.10161](https://arxiv.org/abs/2409.10161) · RoboGSim: [arXiv 2411.11839](https://arxiv.org/abs/2411.11839) · Splatting Physical Scenes: [arXiv 2506.04120](https://arxiv.org/abs/2506.04120) · RoboSplat: [arXiv 2504.13175](https://arxiv.org/abs/2504.13175) · RialTo: [arXiv 2403.03949](https://arxiv.org/abs/2403.03949) · OpenReal2Sim: [code](https://github.com/PointsCoder/OpenReal2Sim)
+- gsplat: [JMLR](https://www.jmlr.org/papers/v26/24-1476.html) · pycolmap: [PyPI](https://pypi.org/project/pycolmap/)
