@@ -38,6 +38,7 @@ from hurobo.utils.video import (
     VideoWriter,
     caption_frame,
     draw_hand_skeleton,
+    draw_outlined_text,
     hstack_resized,
     slow_down_video,
 )
@@ -174,9 +175,13 @@ def _draw_marker_overlay(
             cv2.circle(frame, (round(u), round(v)), 16, colour, 3, cv2.LINE_AA)
 
 
+#: Overlay font scales (Hershey letters are ~22 px tall per unit of scale): panel titles,
+#: the human-panel caption, and the bottom status line.
+_TITLE_SCALE, _CAPTION_SCALE, _STATUS_SCALE = 0.55, 0.45, 0.41
+
+
 def _caption(frame: np.ndarray, text: str) -> None:
-    cv2.putText(frame, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    draw_outlined_text(frame, text, (10, 28), _CAPTION_SCALE)
 
 
 class ClipView:
@@ -315,13 +320,11 @@ class TeleopFrameComposer:
         if name in _ROTATED_CAMERAS:
             image = np.ascontiguousarray(image[::-1, ::-1])
         title = "twin view (human camera pose)" if is_twin else _PANEL_TITLES.get(name, name)
-        return caption_frame(image, title)
+        return caption_frame(image, title, _TITLE_SCALE)
 
 
 def _caption_bottom(frame: np.ndarray, text: str) -> None:
-    y = frame.shape[0] - 10
-    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
-    cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+    draw_outlined_text(frame, text, (10, frame.shape[0] - 10), _STATUS_SCALE)
 
 
 @dataclass

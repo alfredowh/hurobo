@@ -312,19 +312,45 @@ def write_tcp_overlay_video(
     return video_path
 
 
-def caption_frame(image_rgb: np.ndarray, text: str) -> np.ndarray:
+def draw_outlined_text(
+    image_bgr: np.ndarray,
+    text: str,
+    origin: tuple[int, int],
+    font_scale: float,
+    colour: tuple[int, int, int] = (255, 255, 255),
+) -> None:
+    """Draw text with a dark outline (legible on any background) onto an image, in place.
+
+    Hershey letters are about 22 * `font_scale` pixels tall. The stroke is 2 px from scale 0.6
+    up and 1 px below, with a 2 px wider outline.
+
+    Args:
+        image_bgr: image to draw on, modified in place.
+        text: the string.
+        origin: (x, y) of the text's bottom-left corner.
+        font_scale: OpenCV font scale.
+        colour: BGR text colour.
+    """
+    stroke = 2 if font_scale >= 0.6 else 1
+    cv2.putText(
+        image_bgr, text, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), stroke + 2, cv2.LINE_AA
+    )
+    cv2.putText(image_bgr, text, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, colour, stroke, cv2.LINE_AA)
+
+
+def caption_frame(image_rgb: np.ndarray, text: str, font_scale: float = 0.7) -> np.ndarray:
     """Return a BGR copy of an RGB frame with a caption (outlined, for legibility) top-left.
 
     Args:
         image_rgb: shape (H, W, 3) uint8 RGB.
         text: caption.
+        font_scale: OpenCV font scale of the caption.
 
     Returns:
         shape (H, W, 3) uint8 BGR, ready for `VideoWriter` / `cv2.imwrite`.
     """
     image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-    cv2.putText(image_bgr, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(image_bgr, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    draw_outlined_text(image_bgr, text, (10, 28), font_scale)
     return image_bgr
 
 
