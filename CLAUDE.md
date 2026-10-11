@@ -21,6 +21,22 @@ Claude works in two roles at once.
 - **Frames are explicit.** Every pose variable is named with its frame, e.g. `T_cam_table`, `p_tcp_table`, `T_world_bowl`. Frame bugs are the #1 time-sink in retargeting.
 - Working but slightly messy beats clean but late. Refactor only when it's cheap.
 
+## Examples: every feature gets a notebook
+- `examples/` holds one Jupyter notebook per capability; `examples/README.md` is the index and lists the conventions.
+- **When you implement a new feature, add (or extend) a notebook in `examples/` that showcases it, in the same change.** Prefer interactive output where it helps (e.g. the plotly 3D splat viewer in `01_splat_viewer_3d.ipynb`).
+- **Notebooks hold no reusable logic.** A notebook cell is calls into `src/ego2robo` plus at most a few lines of glue (a `print`, a path, a loop over results). Any function, class, plotting helper, setup/bootstrap, or data-building block that a notebook needs, or that a second notebook or script could need, goes into a shared module in the same change. Never define `def`/`class` in a notebook, and never copy a block from one notebook to another.
+- Where shared code goes:
+  - bootstrap (repo root, `MUJOCO_GL`, input-path checks): `ego2robo.utils.notebook` (`setup_notebook`, `existing_paths`); every notebook's first cell is `ROOT = setup_notebook()`;
+  - interactive plotly views (3D, splats, frames, trajectories, aperture): `ego2robo.utils.viewer`; static matplotlib figures (returned as `Figure`, never saved by the helper): `ego2robo.utils.plotting`;
+  - stand-in and synthetic data (marker clips, fake signals): `ego2robo.utils.synthetic`;
+  - maths on poses and frames: `ego2robo.utils.transforms`;
+  - domain logic goes to its domain class/module (`scan`, `splat`, `hand`, `extract`, `human_dataset`, `sim`, ...), not to a util.
+- Prefer interactive (plotly) figures over static PNGs for anything spatial or time-series; return the `go.Figure` and call `.show()` in the notebook.
+- When a notebook or script needs something that today lives in a script (`scripts/NN_*.py` is not importable), move it into the module and have the script import it too, so there is one definition.
+- A new shared function gets a docstring and, if it has logic, a test in `tests/`.
+- Execute the notebook (`uv run jupyter nbconvert --to notebook --execute --inplace ...`) and run `ruff format` + `ruff check` on it before committing. Keep stored outputs small. Add its row to the table in `examples/README.md`.
+- A feature is not "done" until its notebook runs top to bottom.
+
 ## Environment rules
 - **uv only.** No conda, no bare `pip install`. Anaconda base is on PATH — always run code via `uv run ...`, never bare `python`.
 - **Python 3.12** (required by LeRobot ≥ 0.5).

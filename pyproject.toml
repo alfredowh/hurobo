@@ -18,13 +18,25 @@ dependencies = [
   # and a transitive-only reference didn't pick up the source override).
   "torch",
   "torchvision",
+  "gsplat==1.5.3",
+  "gaussian-renderer==0.2.0",
+  "pycolmap>=4.2.1",
+  "open3d>=0.20.0",
+  "coacd>=1.0.14",
 ]
 
 [project.scripts]
 ego2robo = "ego2robo:main"
 
 [dependency-groups]
-dev = ["ruff", "ipykernel"]
+dev = [
+    "ruff",
+    "ipykernel",
+    "plotly>=7.1.0",
+    "nbconvert>=7.17.1",
+    "nbclient>=0.11.0",
+    "pytest",
+]
 
 [tool.uv]
 # hf-libero pulls opencv-python; mediapipe pulls opencv-contrib-python. Both install cv2 and clobber each other.

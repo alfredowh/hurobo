@@ -1,9 +1,10 @@
-# ego2robo: Challenge Plan (v3, after the real2sim review)
+# ego2robo: Challenge Plan (v4, extended deadline)
 
 > **Pitch:** *The robot was never teleoperated. The sim table is a copy of my real one, and the Panda replays what my hand did on it.*
 > 15 human demos, recorded third-person on a tripod → a sim digital twin of the real layout and camera → object-centric retargeting → hundreds of verified robot demos in LIBERO → SmolVLA fine-tuned **only** on that data.
 
-Deadline: **Fri 9 Oct 2026, 23:59 BST = Sat 00:59 CEST**. Plan v2 written Thu 8 Oct ~17:00. v3 written Fri 9 Oct ~01:00 CEST after `REAL2SIM_IDEAS.md`'s research pass — **no code existed yet at that point**, so §5's schedule is re-timed from here. See `REAL2SIM_IDEAS.md` for the full writeup (prior work, hardware verdicts on the S10e/CMF watch, frame-convention notes for the twin camera).
+Deadline: **Fri 16 Oct 2026, 23:59 BST = Sat 17 Oct 00:59 CEST** (extended from Fri 9 Oct). Plan v2 written Thu 8 Oct, v3 Fri 9 Oct after `REAL2SIM_IDEAS.md`'s research pass, **v4 Sat 10 Oct** — only the schedule (§5) and the deadline-dependent gates changed; method and components are as in v3. Setup and the core modules exist; **no real capture has happened yet** (assumed — if that's wrong, pull the gates in §5 forward).
+**Availability:** Fri/Sat/Sun are long days (~8 h), Mon–Thu are 2–3 h each. §5 is built around that: weekdays carry short, well-bounded tasks and launch long background jobs (generation, training) at the end of a session so they run while off. See `REAL2SIM_IDEAS.md` for the full writeup (prior work, hardware verdicts on the S10e/CMF watch, frame-convention notes for the twin camera).
 
 ---
 
@@ -15,7 +16,7 @@ See `CLAUDE.md` for standing instructions: Claude's supervisor/developer roles, 
 - **Third-person tripod camera, confirmed** — not a late change, v2 already assumed a static phone; v3 just renames "ego video" to "phone video" so the README doesn't contradict the setup.
 - **Scene twin added.** On top of v2's object-centric retargeting (§4), a new `SceneTwin` component copies the real camera pose and object layout into the sim and renders from the same viewpoint, so the MVP deliverable becomes a *real ↔ sim-twin* side-by-side rather than a generic LIBERO replay. This is the headline visual. Cited prior work: Video2Sim2Real (arXiv 2606.08828), Phantom (arXiv 2503.00779, visualisation-only reuse — we don't train on edited real frames).
 - **S10e and CMF Watch Pro 2, researched and declined for the core path.** Raw phone IMU drifts too fast for position; the watch has no sensor/GPS export worth using. The S10e's one conditional role is a second tripod view for stereo triangulation, gated on the monocular depth gate below actually failing.
-- **Schedule re-timed** from "now" (Fri 01:00 CEST) instead of from the original Thu 17:00 anchor, since setup hadn't started.
+- **Schedule re-timed** from "now" instead of from the original Thu 17:00 anchor, since setup hadn't started. (Re-timed again in v4 for the extended deadline, §5.)
 
 ---
 
@@ -83,11 +84,11 @@ Cite HaWoR in the README as related work for monocular world-space hand reconstr
 ### Machine (checked)
 Ubuntu 22.04 · RTX A5500 Laptop **16 GB** · driver **560.35** · 24 cores · 62 GB RAM · uv 0.11.7 · system ffmpeg 4.4.2 · 97 GB free disk.
 
-### Setup steps (target: 60 min, gate at 18:00)
+### Setup steps (done; kept for the README's how-to-run)
 
 Run the setup in `CLAUDE.md` (`uv init`, `pyproject.toml`, `uv sync`, env checks).
 
-**Gate (18:00):** torch sees the GPU, `cv2.aruco` imports, and LIBERO renders a frame of the target task. **Fallback:** if the LIBERO env still fails at 18:30, install `robosuite` alone and use its `PickPlace` env for the replay MVP. Drop the VLA comparison and pivot the story to the retargeting and generation quality.
+**Gate (met):** torch sees the GPU, `cv2.aruco` imports, and LIBERO renders a frame of the target task. **Fallback:** if the LIBERO env had failed, install `robosuite` alone and use its `PickPlace` env for the replay MVP. Drop the VLA comparison and pivot the story to the retargeting and generation quality.
 
 ---
 
@@ -101,6 +102,9 @@ ego2robo/
     markers.py       # MarkerPoseEstimator: per-frame T_cam_table, T_table_bowl, T_table_plate
     hand.py          # HandTcpTracker: MediaPipe → metric TCP (thumb/index-tip midpoint) + pinch aperture
     demo.py          # HumanDemo dataclass + save/load (.npz); GraspSegmenter (grasp/release from aperture w/ hysteresis)
+    extract.py       # DemoExtractor: clip → HumanDemo + ClipReport (gap fill, smooth, 20 Hz, grasp/release, depth anchor, QC gates)
+    recorder.py      # LeRobotRecorder: schema-agnostic LeRobotDataset v3 writer (human export now, sim generator later)
+    human_dataset.py # HumanDemoExporter: HumanDemo + source video frames → LeRobot episodes (+ ego2robo_meta.json sidecar)
     twin.py          # SceneTwin: real T_table_cam + T_table_bowl/plate → sets sim object qpos + a non-policy MuJoCo camera at the same pose/FOV
     retarget.py      # ObjectCentricRetargeter: human segments + sim object poses → robot waypoints
     sim.py           # LiberoTask: wraps the lerobot LIBERO env; object poses, success check, render
@@ -112,7 +116,7 @@ ego2robo/
       video.py       # read/write video, side-by-side compositor, robot-overlay alpha composite (stretch)
       plotting.py    # 3D trajectory plots, results figures
   scripts/
-    00_check_env.py  01_calibrate_camera.py  02_extract_demos.py
+    00_check_env.py  01_calibrate_camera.py  02_extract_demos.py  11_export_human_dataset.py
     03_replay.py     04_generate_dataset.py  05_train.sh  06_eval.sh  07_make_figures.py
     # 03_replay.py --twin renders the real-layout/real-viewpoint twin side-by-side (the MVP deliverable, §4/§5)
   data/              # gitignored: raw/, demos/, generated/
@@ -140,28 +144,30 @@ ego2robo/
 6. For each LIBERO init state, read the sim bowl and plate poses. Transform each human segment from the source-object frame into the sim object's frame (`T_world_bowl_sim · T_bowl_tcp_human`). Interpolate the carry. Orientation stays fixed top-down, with yaw from the object. This simplification is stated openly.
 7. `WaypointFollower` steps the env at 20 Hz. The human timing is slowed about 1.5–2× for robot dynamics.
 8. **Keep only rollouts where LIBERO reports success.** The generation success rate is itself a metric of retargeting quality.
-9. Record obs, actions, and the task string through the same wrapper `lerobot-eval` uses, into a LeRobotDataset v3.
+9. Record obs, actions, and the task string through the same wrapper `lerobot-eval` uses, into a LeRobotDataset v3 via `LeRobotRecorder`, at the env's 20 fps (`lerobot-eval`'s LIBERO config; the reference `lerobot/libero` dataset is 10 fps, which we don't follow).
 
 **What the human data contributes:** which object, approach direction, grasp timing, lift height, carry-path shape, place offset relative to the target, and release timing. **What the sim contributes:** the exact object poses. Present this split honestly in the README.
 
 ---
 
-## 5. Schedule
+## 5. Schedule (v4)
 
-**Superseded.** Plan v2's Thursday/Friday schedule below assumed setup started Thu 17:00. No code existed until Fri ~01:00 CEST, so the schedule is re-timed from there (times in CEST; hard deadline Sat 00:59 CEST = Fri 23:59 BST). Order of cuts if running late: photoreal splat stretch (below the table) → robot overlay (§4 step 5d) → SmolVLA (keep ACT) → data-multiplier plot → stereo second view. **Never cut** the twin side-by-side (§4 step 5b) or the README.
+Deadline **Fri 16 Oct 23:59 BST**. Budget: Sat + Sun ≈ 8 h each, Mon–Thu 2–3 h each, Fri ≈ 8 h of which the last block is protected for README and submission. Order of cuts if running late: photoreal splat stretch → robot overlay (§4 step 5d) → SmolVLA (keep ACT) → data-multiplier plot → stereo second view. **Never cut** the twin side-by-side (§4 step 5b) or the README. Protect sleep; no debugging after a block's time is up — take the fallback.
 
-| Time | Block | Gate / fallback |
-|---|---|---|
-| 01:00–02:00 | **Setup** (§2): `uv init`, `pyproject.toml`, `uv sync`, env checks, `00_check_env.py`. Print the table marker (≥ 10 cm), two object markers, generate the ChArUco board. **Then sleep.** | LIBERO renders a frame → otherwise plain robosuite |
-| 02:00–08:00 | **Sleep.** | |
-| 08:00–09:30 | **Capture.** ChArUco calibration. Record **15 demos**: bowl/plate layouts × reps, third-person tripod, 1080p30, stabilisation off, focus/exposure locked, all markers + hand visible. Record the S10e as a second view in parallel (unused unless the depth gate below fails). **Also** (~10 min, do regardless of whether the stretch goal below gets attempted): a 2–3 min slow S24 orbit of the table with the ChArUco board on it, plus one short orbit each of the bowl and plate alone — the capture `RealLayout` (§4) needs anyway, and it's the input the splat stretch goal needs if there's time for it later. | ≥ 12 usable clips |
-| 09:30–13:00 | **Perception** (`camera`, `markers`, `hand`, `demo`). `02_extract_demos.py` → `HumanDemo` npz + 3D plot per episode. | Clean pick-place arcs, grasp/release detected. **Fallback:** marker on the back of the hand; if that still fails, stereo triangulation from the S10e view (`REAL2SIM_IDEAS.md` §3). |
-| 13:00–16:00 | **Twin replay MVP** (`twin`, `sim`, `control`, `retarget`): `SceneTwin` + replay demo #1 in its own real layout, rendered from the real camera viewpoint. **Real ↔ sim-twin side-by-side. Commit it.** | Bowl on plate in ≥ 1 twin replay. **Fallback:** ship the side-by-side anyway with an honest failure note; don't keep debugging past 16:00. |
-| 16:00–19:00 | Launch `04_generate_dataset.py` multiprocess on 24 cores (target 300+ successes), log the success rate. Start **ACT** training (~1 h) as soon as there's enough data; SmolVLA only if generation finishes by ~16:30 (needs the longer run in §2's estimate). | Running without errors; loss decreasing after 15 min |
-| 19:00–22:30 | **README:** pitch, method, results table, gifs, data-multiplier plot if time allows, what worked/didn't, how to run. Eval (`lerobot-eval`, §6 table). Fresh-clone test (`uv sync` + replay on a clean checkout). Make the repo public. | Clean clone works, numbers in the table |
-| 22:30–23:30 | **Buffer, then submit.** Aim to submit by 23:30 CEST (= 22:30 BST), 1.5 h of margin before the hard deadline. | |
+| Day | Hours | Block | Gate / fallback |
+|---|---|---|---|
+| **Sat 10** | ~8 | **Capture first** (~2 h): ChArUco calibration; **15 demos** (bowl/plate layouts × reps, third-person tripod, 1080p30, stabilisation off, focus/exposure locked, all markers + hand visible); S10e as a second view in parallel (unused unless the depth gate fails). **Also** (~10 min, regardless of the stretch goal): a 2–3 min slow S24 orbit of the table with the ChArUco board on it, plus one short orbit each of bowl and plate alone. **Marker IDs:** ChArUco uses DICT_4X4_50 ids 0–16 — print table/bowl/plate markers with ids ≥ 17 (e.g. 20/21/22). Then **Perception** (`camera`, `markers`, `hand`, `demo`): `02_extract_demos.py` → `HumanDemo` npz + 3D plot per episode. | ≥ 12 usable clips by midday. End of day: ≥ 1 clean pick-place arc with grasp/release detected. **Fallback:** marker on the back of the hand; then stereo from the S10e view (`REAL2SIM_IDEAS.md` §3). |
+| **Sun 11** | ~8 | Finish perception on all clips. **Twin replay MVP** (`twin`, `sim`, `control`, `retarget`): `SceneTwin` + replay demo #1 in its own real layout, rendered from the real camera viewpoint. **Real ↔ sim-twin side-by-side. Commit it.** If the gate is met with ≥ 2 h of slack, attempt the splat stretch (below), hard stop 22:00. | Bowl on plate in ≥ 1 twin replay by ~18:00. **Fallback:** ship the side-by-side with an honest failure note and move on Monday; don't keep debugging. |
+| **Mon 12** | 2–3 | Retargeting + `WaypointFollower` on generic LIBERO init states (not only the twin layout). Fix grasp-height/offset constants once. Run 20 rollouts, measure the success rate. | ≥ 1 success in a non-twin init state; success rate known. |
+| **Tue 13** | 2–3 | `DemoGenerator` + `04_generate_dataset.py` (multiprocess, 24 cores, success-only, LeRobotDataset v3). Smoke-test 10 episodes, then **launch the full run at the end of the session** — it runs overnight. | Full run started without errors, dataset schema matches the `lerobot-eval` wrapper. |
+| **Wed 14** | 2–3 | Check the generated dataset (target 300+ successes; accept what exists if lower). Fix one obvious generator issue at most, relaunch only if cheap. Write `05_train.sh`/`06_eval.sh`. **Start ACT training** (~1 h) in the session. | Loss decreasing after 15 min. **Fallback:** if < 100 successes, say so, train on what exists and make the success rate the headline metric. |
+| **Thu 15** | 2–3 | ACT eval (`lerobot-eval`, N = 50) + open-loop replay row. **Launch SmolVLA training at the end of the session** so it runs overnight. | SmolVLA running by the end of Thursday, else ACT-only and drop the SmolVLA row (state it in the README). |
+| **Fri 16** | ~8 | Morning: SmolVLA eval, `07_make_figures.py`, gifs, data-multiplier plot. Splat stretch only here if not attempted Sunday and everything else is done; hard stop 13:00. **13:00–18:00 README:** pitch, method, results table, gifs, what worked/didn't, how to run, repo public. Fresh-clone test (`uv sync` + replay on a clean checkout). | Numbers in the table, clean clone works. |
+| | | **Buffer, then submit.** Aim to submit by ~20:00 BST on Fri 16, leaving ~4 h before the hard deadline. | |
 
-**Stretch, gated, optional, no dedicated slot** (`REAL2SIM_IDEAS.md` §7): photoreal real2sim via DISCOVERSE's `gaussian_renderer` (MuJoCo-native, verified on this laptop Fri 02:10 — `gsplat` JIT-compiles against torch cu126, ~2,350 FPS). Train a splat of the bowl+plate+table from the morning's S24 orbit, attach to the LIBERO sim bodies, composite a few twin-replay frames (splat scene, mesh robot, depth-merged). **Only attempted if `04_generate_dataset.py`/training (16:00–19:00) finishes early enough to leave genuine slack before 19:00** — it never borrows time from the README block, and it never starts at all if the 13:00–16:00 MVP gate wasn't met on time. **Hard stop at 19:00 regardless of progress.** Deliverable if it works: a couple of composited frames for the README (LIBERO textures vs. my scene, same pose) — not a retrained policy. If it doesn't get attempted or doesn't produce a clean composite, it becomes a named future-work item in the README instead (cite DISCOVERSE + RoboGSim).
+**Stretch, gated, optional** (`REAL2SIM_IDEAS.md` §7): photoreal real2sim via DISCOVERSE's `gaussian_renderer` (MuJoCo-native, verified on this laptop — `gsplat` JIT-compiles against torch cu126, ~2,350 FPS). Train a splat of the bowl+plate+table from Saturday's S24 orbit, attach to the LIBERO sim bodies, composite a few twin-replay frames (splat scene, mesh robot, depth-merged). **Only on Sunday after the MVP gate is met with real slack (hard stop 22:00), or Friday morning if everything else is done (hard stop 13:00)** — it never borrows from the weekday generation/training blocks or the README block, and never starts if the Sunday MVP gate wasn't met. It needs the GPU, so it must not overlap a training run. Deliverable if it works: a couple of composited frames for the README (LIBERO textures vs. my scene, same pose) — not a retrained policy. If it doesn't get attempted or doesn't produce a clean composite, it becomes a named future-work item in the README instead (cite DISCOVERSE + RoboGSim).
+
+**Pre-built overnight (Fri ~03:30, dummy data only, no real capture involved):** `splat.py` (`SplatCompositor`: splats on LIBERO bodies + mesh Panda, per-pixel depth merge) + `08_splat_composite.py`, and `scan.py` + `09_scan_object.py` (orbit video → pycolmap SfM → gsplat training → object frame / ChArUco metric alignment → per-object crops). Verified on: DISCOVERSE's scanned bowl/plate/table-cloth splats (HF `tatp/DISCOVERSE-models`) and a Mixkit turntable clip (10424, 120/120 views registered, ~3 min total) — composite ~10–13 ms/frame at 384². `ChArUcoAligner` checked only on synthetic board views (scale err 0.02 %, 0.4 mm); `--charuco` has **not** run end-to-end on a real video. So Saturday's orbit capture feeds straight in; the stretch's hard stops (§5) still apply to everything after it.
 
 ---
 
@@ -192,9 +198,10 @@ Figures:
 | MediaPipe loses the hand during the grasp (occlusion) | Interpolate short gaps. A marker on the back of the hand is the robust fallback. |
 | Grasps slip in sim | Tune the grasp height and offset per object once; it's fine for that to be a fixed sim-side constant |
 | Low generation success rate | Fine as long as there are enough successes in absolute terms. Report the rate honestly as a metric. |
-| SmolVLA training too slow or unstable | ACT fallback (~1 h). The story still holds: the policy is trained only on your data. |
-| Running out of time | Cut stretch first, then ACT, then the multiplier plot. **Never cut the README block.** |
-| Photoreal splat stretch (§5) eats time or the composite looks bad | It has no dedicated slot and a hard 19:00 stop by construction — it literally cannot run past that point. A bad composite just means it becomes a future-work line in the README instead of a figure. |
+| SmolVLA training too slow or unstable | ACT fallback (~1 h); SmolVLA must be launched by Thu 15 evening or it's dropped. The story still holds: the policy is trained only on your data. |
+| Running out of time | Cut stretch first, then SmolVLA (keep ACT), then the multiplier plot. **Never cut the README block.** |
+| Weekday blocks (2–3 h) too short for debugging | Weekdays only hold bounded tasks and launch background jobs at the end of the session; anything open-ended waits for the weekend or is cut per the §5 order. |
+| Photoreal splat stretch (§5) eats time or the composite looks bad | It has no dedicated slot and hard stops (Sun 22:00 / Fri 13:00) — it cannot run past them. A bad composite just means it becomes a future-work line in the README instead of a figure. |
 
 ## 8. Definition of done
 A judge clones the repo, runs `uv sync`, and watches a gif of your hand followed by the Panda doing the same task. They read a short method section with a clear "your data → robot demos" multiplier, and they see a results table where a VLA trained **only on data derived from your phone video** succeeds in LIBERO, with an honest note on what didn't work.
