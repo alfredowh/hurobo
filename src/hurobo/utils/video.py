@@ -192,6 +192,25 @@ def hstack_resized(frames: list[np.ndarray], target_height: int = 480) -> np.nda
     return np.concatenate(resized, axis=1)
 
 
+def fit_in_box(frame: np.ndarray, box_width: int, box_height: int) -> np.ndarray:
+    """Scale a frame, keeping its aspect ratio, to the largest size that fits a box.
+
+    Args:
+        frame: shape (H, W, 3).
+        box_width: available width in pixels.
+        box_height: available height in pixels.
+
+    Returns:
+        the frame scaled by min(box_width / W, box_height / H); unchanged if the box is degenerate.
+    """
+    height, width = frame.shape[:2]
+    scale = min(box_width / width, box_height / height)
+    if scale <= 0 or abs(scale - 1.0) < 1e-3:
+        return frame
+    size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    return cv2.resize(frame, size, interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+
+
 def make_side_by_side(
     frame_left: np.ndarray, frame_right: np.ndarray, target_height: int = 480
 ) -> np.ndarray:

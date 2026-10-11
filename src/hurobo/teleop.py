@@ -65,7 +65,12 @@ class TableToWorld:
 
     @classmethod
     def grounded(
-        cls, p_table_anchor: np.ndarray, p_world_eef: np.ndarray, yaw_rad: float = 0.0, scale: float = 1.0
+        cls,
+        p_table_anchor: np.ndarray,
+        p_world_eef: np.ndarray,
+        yaw_rad: float = 0.0,
+        scale: float = 1.0,
+        marker_height_m: float = 0.0,
     ) -> TableToWorld:
         """Like the plain delta map, but the anchor height is the hand's height above the table.
 
@@ -78,9 +83,12 @@ class TableToWorld:
             p_world_eef: shape (3,), robot end effector now, world frame.
             yaw_rad: see the class.
             scale: see the class.
+            marker_height_m: height of the marker plane above the real table top (a marker shown
+                on a tablet sits its thickness above the table). Table-frame z = 0 is the marker
+                plane, so the hand is this much higher above the real table than its z says.
         """
         p_world_anchor = np.array(
-            [p_world_eef[0], p_world_eef[1], SIM_TABLE_TOP_Z + scale * p_table_anchor[2]]
+            [p_world_eef[0], p_world_eef[1], SIM_TABLE_TOP_Z + scale * (p_table_anchor[2] + marker_height_m)]
         )
         return cls(np.asarray(p_table_anchor, dtype=float), p_world_anchor, yaw_rad, scale)
 

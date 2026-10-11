@@ -2,6 +2,7 @@
 """Generates the ChArUco calibration board and calibrates a camera from it.
 
 Run with:
+    uv run python scripts/01_calibrate_camera.py generate-screen-markers --background table.jpg
     uv run python scripts/01_calibrate_camera.py generate-board
     uv run python scripts/01_calibrate_camera.py generate-markers
     uv run python scripts/01_calibrate_camera.py capture --source webcam:0
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -21,7 +23,7 @@ import cv2
 from hurobo.camera import ChArUcoCalibrator
 from hurobo.camera_source import open_frame_source, parse_source
 from hurobo.live import LiveWindow
-from hurobo.markers import render_marker_image
+from hurobo.markers import MarkerLayout, render_marker_image, render_screen_marker_sheet
 
 BOARD_IMAGE_PATH = Path("data/charuco_board.png")
 INTRINSICS_PATH = Path("data/camera_intrinsics.npz")
@@ -48,6 +50,30 @@ def generate_markers(out_dir: Path, ids: tuple[int, ...]) -> None:
     )
 
 
+def generate_screen_markers(
+    out_path: Path,
+    ppi: float,
+    screen_px: tuple[int, int],
+    background: Path | None,
+    transparent: bool = False,
+) -> None:
+    """Write a full-screen image with all three markers at true size, for a tablet instead of a printer."""
+    layout = MarkerLayout(20, 0.10, {"bowl": 21, "plate": 22}, 0.05)
+    photo = None if background is None else cv2.imread(str(background))
+    if background is not None and photo is None:
+        raise SystemExit(f"cannot read background image {background}")
+    sheet = render_screen_marker_sheet(layout, ppi, screen_px, photo, transparent)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), sheet)
+    print(f"Saved {out_path} ({screen_px[0]}x{screen_px[1]} px at {ppi:g} PPI)")
+    print(
+        "Show it fullscreen at 100% (1 image px = 1 screen px; Windows Photos may rescale, so check "
+        "Display scaling), brightness high, matte/anti-glare if you can.\n"
+        "Then measure the table marker's BLACK square with a ruler: it must be 100 mm (objects 50 mm). "
+        "If it is not, pass the measured size via --ppi (PPI x measured/100)."
+    )
+
+
 def capture_and_calibrate(
     calibrator: ChArUcoCalibrator, source: str, width: int, height: int, out_path: Path
 ) -> None:
@@ -59,6 +85,8 @@ def capture_and_calibrate(
         while not window.closed and not frames.ended:
             newest = frames.latest()
             if newest is None:
+                window.process_events()
+                time.sleep(0.01)
                 continue
             frame, index = newest
             preview = frame.copy()
@@ -96,6 +124,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    screen_parser = subparsers.add_parser(
+        "generate-screen-markers", help="Render all three markers at true size for a tablet screen"
+    )
+    screen_parser.add_argument("--out", type=Path, default=Path("data/markers/screen_markers.png"))
+    screen_parser.add_argument("--ppi", type=float, default=217.0, help="display pixels per inch")
+    screen_parser.add_argument("--screen", default="1800x1200", help="display resolution WxH")
+    screen_parser.add_argument(
+        "--transparent", action="store_true", help="PNG with alpha: only the markers are opaque"
+    )
+    screen_parser.add_argument("--background", type=Path, default=None, help="photo of the tabletop")
+
     generate_parser = subparsers.add_parser("generate-board", help="Render the board to a PNG")
     generate_parser.add_argument("--out", type=Path, default=BOARD_IMAGE_PATH)
 
@@ -118,6 +157,9 @@ def main() -> int:
 
     if args.command == "generate-board":
         generate_board(calibrator, args.out)
+    elif args.command == "generate-screen-markers":
+        width, height = (int(v) for v in args.screen.lower().split("x"))
+        generate_screen_markers(args.out, args.ppi, (width, height), args.background, args.transparent)
     elif args.command == "generate-markers":
         generate_markers(args.out, tuple(args.ids))
     elif args.command == "capture":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -16,7 +17,7 @@ from hurobo.demo import GraspSegmenter, HumanDemo
 from hurobo.extract import ClipReport, ExtractionConfig, extract_demo
 from hurobo.hand import HandTcpTracker
 from hurobo.live import LiveWindow
-from hurobo.live_hand import LiveHandCommandSource, LiveHandTracker
+from hurobo.live_hand import LiveHandCommandSource, LiveHandSample, LiveHandTracker
 from hurobo.markers import MarkerLayout, MarkerPoseEstimator
 from hurobo.props import CubeProp
 from hurobo.sim import LiberoTask
@@ -44,6 +45,7 @@ from hurobo.utils.video import (
 )
 
 _RED, _CYAN = (0, 0, 255), (255, 255, 0)
+_GREEN, _ORANGE, _BLUE = (0, 220, 0), (0, 140, 255), (255, 80, 0)
 
 
 @dataclass
@@ -235,12 +237,47 @@ class LiveView:
         sample, mapping = self._source.latest_sample, self._source.mapping
         if sample is not None and sample.hand is not None and sample.hand.landmarks_image_px is not None:
             draw_hand_skeleton(frame, sample.hand.landmarks_image_px)
+        self._draw_marker_state(frame, sample)
         if sample is not None and sample.t_cam_table is not None and mapping is not None:
             _draw_marker_overlay(
                 frame, self._intrinsics, sample.t_cam_table, mapping, info.command.pos_world, info.p_world_eef
             )
         _caption(frame, f"live: {self._source.status}")
+        text, ok = self._source.marker_status
+        draw_outlined_text(frame, text, (10, 52), _CAPTION_SCALE, _GREEN if ok else _ORANGE)
         return frame
+
+    def _draw_marker_state(self, frame: np.ndarray, sample: LiveHandSample | None) -> None:
+        """Outline the detected markers (table marker thick green, others thin) or, once the table is
+        locked, draw its frame axes (x red, y green, z blue) so the lock can be checked by eye."""
+        if sample is None:
+            return
+        if sample.t_cam_table is not None:
+            self._draw_table_axes(frame, sample.t_cam_table)
+            return
+        detection = sample.detection
+        if detection is None:
+            return
+        for marker_id, corners in zip(detection.ids, detection.corners, strict=True):
+            is_table = marker_id == detection.table_id
+            polygon = corners.astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(frame, [polygon], True, _GREEN if is_table else _ORANGE, 4 if is_table else 2)
+            label = f"id {marker_id}" + (" TABLE" if is_table else "")
+            draw_outlined_text(
+                frame, label, (int(corners[0, 0]), int(corners[0, 1]) - 8), _CAPTION_SCALE, _GREEN
+            )
+
+    def _draw_table_axes(self, frame: np.ndarray, t_cam_table: np.ndarray, length_m: float = 0.08) -> None:
+        origin = apply_transform(t_cam_table, np.zeros(3))
+        if origin[2] <= 0:
+            return
+        o = tuple(round(v) for v in self._intrinsics.project(origin))
+        for axis, colour in zip(np.eye(3), (_RED, _GREEN, _BLUE), strict=True):
+            tip = apply_transform(t_cam_table, axis * length_m)
+            if tip[2] > 0:
+                cv2.line(
+                    frame, o, tuple(round(v) for v in self._intrinsics.project(tip)), colour, 4, cv2.LINE_AA
+                )
 
 
 #: Camera whose mounting leaves the upright render 180 degrees off from the agentview's orientation.
@@ -465,6 +502,7 @@ def run_hand_teleop(
     align: str = "agentview",
     scale: float = 1.0,
     table_height: bool = False,
+    marker_height_m: float = 0.0,
     panel_height: int = 300,
     record: bool = True,
     window: LiveWindow | None = None,
@@ -482,6 +520,8 @@ def run_hand_teleop(
         scale: robot metres per hand metre.
         table_height: map the hand's height above the table onto the sim table (the robot
             first moves to that height) instead of pure deltas from its start pose.
+        marker_height_m: height of the marker plane above the real table top; only used with
+            `table_height` (see `TableToWorld.grounded`).
         panel_height: height of each display panel.
         record: keep display frames in the trace (needed for `write_run_videos`).
         window: live view; None for headless.
@@ -495,8 +535,10 @@ def run_hand_teleop(
         yaw = 0.0
     else:
         yaw = float(np.radians(float(align)))
-    build_mapping = TableToWorld.grounded if table_height else TableToWorld
-    mapping = build_mapping(demo.tcp_pos_table[0], p_world_eef0, yaw, scale)
+    if table_height:
+        mapping = TableToWorld.grounded(demo.tcp_pos_table[0], p_world_eef0, yaw, scale, marker_height_m)
+    else:
+        mapping = TableToWorld(demo.tcp_pos_table[0], p_world_eef0, yaw, scale)
     place_twin_camera(task, mapping, demo.t_table_cam, clip.intrinsics.fovy_degrees)
 
     source = SequenceCommandSource(
@@ -551,12 +593,14 @@ def run_live_teleop(
     align: str = "agentview",
     scale: float = 1.0,
     table_height: bool = False,
+    marker_height_m: float = 0.0,
     panel_height: int = 300,
     record: bool = False,
     window: LiveWindow | None = None,
     max_steps: int | None = None,
     calibration_frames: int = 10,
     camera_pitch_deg: float = 0.0,
+    on_event: Callable[[str], None] | None = None,
 ) -> LiveTeleopResult:
     """Reset the sim and drive the arm from a live camera until quit, stream end or `max_steps`.
 
@@ -574,6 +618,8 @@ def run_live_teleop(
         align: `agentview`, `table`, or a yaw in degrees (see `run_hand_teleop`); marker mode only.
         scale: robot metres per hand metre.
         table_height: ground z to the sim table (see `TableToWorld.grounded`); marker mode only.
+        marker_height_m: height of the marker plane above the real table top, e.g. a tablet's
+            thickness; only used with `table_height`.
         panel_height: height of each display panel.
         record: keep display frames in the trace.
         window: live view and keyboard (`r` re-anchors, `escape`/`q` quits); None for headless.
@@ -581,6 +627,7 @@ def run_live_teleop(
         calibration_frames: table-marker detections averaged before locking (marker mode).
         camera_pitch_deg: markerless only: how far the real camera's optical axis points
             below horizontal (a laptop screen tilted back looks slightly up: negative).
+        on_event: called with a line whenever the table-marker or tracking status changes.
 
     Raises:
         ValueError: if `table_height` is asked for without markers (there is no table plane).
@@ -599,8 +646,9 @@ def run_live_teleop(
             yaw = yaw_aligning_views(t_ref_cam, task.camera_pose_world("agentview"))
         else:
             yaw = 0.0 if align == "table" else float(np.radians(float(align)))
-        build = TableToWorld.grounded if table_height else TableToWorld
-        return build(p_ref_tcp, p_world_eef, yaw, scale)
+        if table_height:
+            return TableToWorld.grounded(p_ref_tcp, p_world_eef, yaw, scale, marker_height_m)
+        return TableToWorld(p_ref_tcp, p_world_eef, yaw, scale)
 
     def on_anchor(mapping: TableToWorld, t_ref_cam: np.ndarray) -> None:
         place_twin_camera(task, mapping, t_ref_cam, intrinsics.fovy_degrees)
@@ -612,7 +660,9 @@ def run_live_teleop(
         calibration_frames=calibration_frames,
     )
     try:
-        source = LiveHandCommandSource(frames, tracker, make_mapping, keys=window, on_anchor=on_anchor)
+        source = LiveHandCommandSource(
+            frames, tracker, make_mapping, keys=window, on_anchor=on_anchor, on_event=on_event
+        )
         session = TeleopSession(task, source, WorkspaceLimits.around(p_world_eef0), cube)
         composer = TeleopFrameComposer(
             task,

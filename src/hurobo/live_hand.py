@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,9 +13,13 @@ from hurobo.camera_source import FrameSource
 from hurobo.demo import GraspSegmenter
 from hurobo.extract import HandTracker, MarkerEstimator, mean_transform
 from hurobo.hand import HandFrameResult
+from hurobo.markers import MarkerDetection
 from hurobo.teleop import KeySource, TableToWorld, TeleopCommand
 from hurobo.utils.signal import ExponentialSmoother
 from hurobo.utils.transforms import apply_transform, invert_transform
+
+#: Progress counters like " (3/10)" change every frame; ignored when deciding whether a status changed.
+_PROGRESS = re.compile(r" \(\d+/\d+\)")
 
 #: (hand TCP in the reference frame, robot end effector in the world, T_ref_cam) -> reference-to-world map.
 MappingFactory = Callable[[np.ndarray, np.ndarray, np.ndarray], TableToWorld]
@@ -30,6 +35,8 @@ class LiveHandSample:
         p_table_tcp: shape (3,) smoothed TCP in the table frame, or None without hand/table.
         closed: gripper state after hysteresis (holds its last value while the hand is lost).
         t_cam_table: the locked camera-from-table pose, or None before `table_ready`.
+        detection: what the marker detector saw in this frame; None once the table is locked
+            (detection stops) or when the estimator does not report it.
     """
 
     table_ready: bool
@@ -37,6 +44,7 @@ class LiveHandSample:
     p_table_tcp: np.ndarray | None
     closed: bool
     t_cam_table: np.ndarray | None
+    detection: MarkerDetection | None = None
 
 
 class LiveHandTracker:
@@ -80,6 +88,11 @@ class LiveHandTracker:
         self._last_ms = -1
 
     @property
+    def uses_markers(self) -> bool:
+        """False in markerless mode, where the camera frame is the reference."""
+        return self._markers is not None
+
+    @property
     def table_ready(self) -> bool:
         """True once the table pose is locked."""
         return self._t_cam_table is not None
@@ -102,8 +115,10 @@ class LiveHandTracker:
             frame_bgr: the newest camera frame.
             t_s: its time in seconds (any origin, increasing).
         """
+        detection = None
         if self._t_cam_table is None and self._markers is not None:
             poses = self._markers.estimate(frame_bgr)
+            detection = getattr(self._markers, "last_detection", None)
             if poses is not None:
                 self._poses.append(poses["table"])
                 if len(self._poses) >= self._calibration_frames:
@@ -117,7 +132,7 @@ class LiveHandTracker:
                 p_table = self._smoother.update(
                     apply_transform(invert_transform(self._t_cam_table), hand.tcp_pos_cam)
                 )
-        return LiveHandSample(self.table_ready, hand, p_table, self._closed, self._t_cam_table)
+        return LiveHandSample(self.table_ready, hand, p_table, self._closed, self._t_cam_table, detection)
 
 
 class LiveHandCommandSource:
@@ -140,6 +155,7 @@ class LiveHandCommandSource:
         keys: KeySource | None = None,
         on_anchor: Callable[[TableToWorld, np.ndarray], None] | None = None,
         clock: Callable[[], float] | None = None,
+        on_event: Callable[[str], None] | None = None,
     ) -> None:
         """Configure the source.
 
@@ -153,6 +169,8 @@ class LiveHandCommandSource:
             on_anchor: called with (mapping, T_table_cam) whenever the mapping is (re)built,
                 e.g. to move the twin camera.
             clock: time source in seconds, injectable for tests.
+            on_event: called with a line of text whenever the marker or tracking status changes
+                (e.g. to print to the terminal).
         """
         self._frames = frames
         self._tracker = tracker
@@ -166,6 +184,8 @@ class LiveHandCommandSource:
         self._sample: LiveHandSample | None = None
         self._frame: np.ndarray | None = None
         self._last: TeleopCommand | None = None
+        self._on_event = on_event
+        self._reported: tuple[str, str] | None = None
 
     @property
     def mapping(self) -> TableToWorld | None:
@@ -196,6 +216,27 @@ class LiveHandCommandSource:
             return "hand lost: holding"
         return "tracking"
 
+    @property
+    def marker_status(self) -> tuple[str, bool]:
+        """(one line about the table marker, True if it is locked or currently seen)."""
+        sample = self._sample
+        if sample is None:
+            return "table marker: waiting for camera", False
+        if not self._tracker.uses_markers:
+            return "markers off: relative hand motion only", True
+        if sample.table_ready:
+            return "table marker: LOCKED", True
+        detection = sample.detection
+        got, need = self._tracker.calibration_progress
+        if detection is None:
+            return f"table marker: searching ({got}/{need})", False
+        if detection.table_found:
+            return f"table marker: DETECTED, locking ({got}/{need})", True
+        if detection.mirrored_table_found:
+            return "table marker: image is MIRRORED, run with --no-mirror", False
+        seen = f"seen ids {detection.ids}" if detection.ids else "no markers in view"
+        return f"table marker: NOT FOUND (need id {detection.table_id}; {seen})", False
+
     def next_command(self, p_world_eef: np.ndarray) -> TeleopCommand | None:
         """See `teleop.CommandSource`."""
         if self._keys is not None and any(self._keys.consume(k) for k in self.QUIT_KEYS):
@@ -208,6 +249,7 @@ class LiveHandCommandSource:
             self._frame, self._last_index = newest[0], newest[1]
             self._sample = self._tracker.process(self._frame, self._clock() - self._t0)
         sample = self._sample
+        self._report()
         if sample is not None and sample.p_table_tcp is not None:
             anchoring = self._mapping is None or recenter
             if anchoring:
@@ -217,6 +259,19 @@ class LiveHandCommandSource:
         if self._last is None:
             return TeleopCommand(np.asarray(p_world_eef, dtype=float).copy(), False)
         return self._last
+
+    def _report(self) -> None:
+        """Send `on_event` a line when the marker or tracking status changed."""
+        if self._on_event is None or self._sample is None:
+            return
+        current = (_PROGRESS.sub("", self.marker_status[0]), _PROGRESS.sub("", self.status))
+        if current == self._reported:
+            return
+        if self._reported is None or current[0] != self._reported[0]:
+            self._on_event(current[0])
+        if self._reported is None or current[1] != self._reported[1]:
+            self._on_event(f"status: {current[1]}")
+        self._reported = current
 
     def _anchor(self, sample: LiveHandSample, p_world_eef: np.ndarray) -> None:
         t_table_cam = invert_transform(sample.t_cam_table)

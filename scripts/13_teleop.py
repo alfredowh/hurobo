@@ -70,6 +70,12 @@ def add_common_options(parser: argparse.ArgumentParser, suppress_defaults: bool 
     )
     parser.add_argument("--panel-height", type=int, default=default(300))
     parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        default=default(False),
+        help="open the live window full screen (F11 toggles); the view is scaled to fit",
+    )
+    parser.add_argument(
         "--live",
         action="store_true",
         default=default(False),
@@ -123,7 +129,8 @@ def parse_args() -> argparse.Namespace:
         "--mirror",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="flip the live image left-right like a mirror (default: on for webcams only)",
+        help="flip the live image left-right like a mirror (default: on for webcams with --no-markers; "
+        "never with markers, since ArUco cannot read mirrored markers)",
     )
     hand.add_argument("--calib-frames", type=int, default=10, help="table-marker detections to average")
     hand.add_argument(
@@ -154,6 +161,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="map the hand's height above the real table to height above the sim table "
         "(robot first moves there); default: pure deltas from the robot's start pose",
+    )
+    hand.add_argument(
+        "--marker-height-m",
+        type=float,
+        default=0.0,
+        help="height of the marker plane above the real table top, e.g. 0.0083 for a Surface Go lying "
+        "on the table showing the marker; only matters with --table-height",
     )
     hand.add_argument("--no-record", action="store_true", help="skip the mp4 outputs")
     hand.add_argument(
@@ -208,7 +222,7 @@ def run_hand(args: argparse.Namespace, task: LiberoTask, cube: CubeProp | None) 
         f"QC: {'; '.join(clip.report.reasons) or 'all gates passed'}"
     )
 
-    window = LiveWindow("hurobo: hand teleop") if args.live else None
+    window = LiveWindow("hurobo: hand teleop", args.fullscreen) if args.live else None
     result = run_hand_teleop(
         task,
         cube,
@@ -217,6 +231,7 @@ def run_hand(args: argparse.Namespace, task: LiberoTask, cube: CubeProp | None) 
         args.align,
         args.scale,
         args.table_height,
+        args.marker_height_m,
         args.panel_height,
         record=not args.no_record,
         window=window,
@@ -249,7 +264,11 @@ def run_live(spec: SourceSpec, args: argparse.Namespace, task: LiberoTask, cube:
     if args.no_markers and args.table_height:
         raise SystemExit("--table-height needs the table marker; drop it or drop --no-markers")
     frames = open_frame_source(spec, width, height, args.fps)
-    if args.mirror if args.mirror is not None else spec.kind == "webcam":
+    use_markers = not args.no_markers
+    if args.mirror and use_markers:
+        frames.close()
+        raise SystemExit("--mirror makes the table marker unreadable; drop --mirror or add --no-markers")
+    if args.mirror if args.mirror is not None else (spec.kind == "webcam" and not use_markers):
         frames = MirroredFrameSource(frames)
     if args.intrinsics.exists():
         intrinsics = CameraIntrinsics.load(args.intrinsics)
@@ -266,7 +285,7 @@ def run_live(spec: SourceSpec, args: argparse.Namespace, task: LiberoTask, cube:
             "Hand scale and depth are only roughly right; run scripts/01_calibrate_camera.py capture."
         )
     print(f"camera {spec.target!r}: {frames.size[0]}x{frames.size[1]}")
-    window = None if args.headless else LiveWindow("hurobo: live hand teleop")
+    window = None if args.headless else LiveWindow("hurobo: live hand teleop", args.fullscreen)
     max_steps = None if args.max_seconds is None else int(args.max_seconds * 20)
     result = run_live_teleop(
         task,
@@ -277,12 +296,14 @@ def run_live(spec: SourceSpec, args: argparse.Namespace, task: LiberoTask, cube:
         args.align,
         args.scale,
         args.table_height,
+        args.marker_height_m,
         args.panel_height,
         record=args.record,
         window=window,
         max_steps=max_steps,
         calibration_frames=args.calib_frames,
         camera_pitch_deg=args.camera_pitch,
+        on_event=lambda line: print(f"[live] {line}", flush=True),
     )
     if window is not None:
         window.close()
@@ -314,7 +335,7 @@ def list_sources() -> None:
 def run_keyboard(args: argparse.Namespace, task: LiberoTask, cube: CubeProp | None) -> None:
     obs = reset_with_props(task, cube)
     p_world_eef0, _ = task.get_eef_pose(obs)
-    window = LiveWindow("hurobo: keyboard teleop")
+    window = LiveWindow("hurobo: keyboard teleop", args.fullscreen)
     source = KeyboardCommandSource(window, p_world_eef0, speed_mps=args.speed)
     session = TeleopSession(task, source, WorkspaceLimits.around(p_world_eef0), cube)
     composer = TeleopFrameComposer(task, default_layout(False, task.TWIN_CAMERA_NAME), args.panel_height)

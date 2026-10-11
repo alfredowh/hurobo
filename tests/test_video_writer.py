@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hurobo.utils.video import VideoWriter, read_frames
+from hurobo.utils.video import VideoWriter, fit_in_box, read_frames
 
 
 def _codec(path: Path) -> str:
@@ -45,3 +45,10 @@ def test_mismatched_frame_raises(tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             writer.write(np.zeros((10, 10, 3), dtype=np.uint8))
         writer.write(np.zeros((48, 64, 3), dtype=np.uint8))
+
+
+def test_fit_in_box_keeps_aspect_and_fits() -> None:
+    frame = np.zeros((300, 900, 3), np.uint8)
+    assert fit_in_box(frame, 1800, 1000).shape[:2] == (600, 1800)  # width-limited
+    assert fit_in_box(frame, 450, 1000).shape[:2] == (150, 450)  # shrinks too
+    assert fit_in_box(frame, 900, 300) is frame  # already fits

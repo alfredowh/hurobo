@@ -65,6 +65,16 @@ def test_grounded_mapping_puts_table_plane_on_sim_table() -> None:
     assert mapping.point_to_world(np.array([0.1, 0.2, 0.0]))[2] == pytest.approx(0.9)
 
 
+def test_marker_height_lifts_the_grounded_anchor() -> None:
+    """A marker plane 8.3 mm above the table makes the hand 8.3 mm higher above the real table."""
+    base = TableToWorld.grounded(np.array([0.1, 0.2, 0.12]), np.array([-0.2, 0.0, 1.1]))
+    lifted = TableToWorld.grounded(
+        np.array([0.1, 0.2, 0.12]), np.array([-0.2, 0.0, 1.1]), marker_height_m=0.0083
+    )
+    assert lifted.p_world_anchor[2] - base.p_world_anchor[2] == pytest.approx(0.0083)
+    assert lifted.point_to_world(np.array([0.1, 0.2, 0.0]))[2] == pytest.approx(0.9 + 0.0083)
+
+
 def test_camera_view_is_preserved_by_the_mapping() -> None:
     """A table point seen by the human camera and its world image seen by the mapped camera agree."""
     t_table_cam = look_at_origin_pose(np.array([0.1, -0.45, 0.4]))

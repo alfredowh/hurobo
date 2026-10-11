@@ -180,7 +180,7 @@ class ChArUcoCalibrator:
         return True
 
     def calibrate(self) -> CameraIntrinsics:
-        """Run `cv2.aruco.calibrateCameraCharuco` over all frames added so far.
+        """Fit the pinhole + distortion model to every board view added so far.
 
         Returns:
             The fitted CameraIntrinsics.
@@ -193,8 +193,15 @@ class ChArUcoCalibrator:
                 f"Only {len(self._all_corners)} usable calibration frames; need >= 5. "
                 "Show the board at more angles/distances and keep it fully in frame."
             )
-        _, camera_matrix, dist_coeffs, _, _ = cv2.aruco.calibrateCameraCharuco(
-            self._all_corners, self._all_ids, self._board, self._image_size, None, None
+        # OpenCV >= 4.7 dropped aruco.calibrateCameraCharuco: match corners to 3D board points
+        # ourselves and use the plain calibrator.
+        object_points, image_points = [], []
+        for corners, ids in zip(self._all_corners, self._all_ids, strict=True):
+            board_points, board_image_points = self._board.matchImagePoints(corners, ids)
+            object_points.append(board_points)
+            image_points.append(board_image_points)
+        _, camera_matrix, dist_coeffs, _, _ = cv2.calibrateCamera(
+            object_points, image_points, self._image_size, None, None
         )
         width, height = self._image_size
         return CameraIntrinsics(
