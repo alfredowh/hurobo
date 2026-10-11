@@ -12,7 +12,7 @@ from hurobo.camera import CameraIntrinsics
 from hurobo.scan import PosedImage, SfmResult, object_frame_from_orbit
 from hurobo.utils.notebook import existing_paths, find_project_root
 from hurobo.utils.synthetic import synthetic_aperture_trace
-from hurobo.utils.transforms import look_at_origin_pose, make_transform, pose_error
+from hurobo.utils.transforms import look_at_origin_pose, look_at_t_cam_world, make_transform, pose_error
 
 
 def test_pinhole_intrinsics_fovy_and_projection() -> None:
@@ -77,3 +77,12 @@ def test_project_root_and_existing_paths(tmp_path: Path) -> None:
     assert existing_paths({"a": present, "b": tmp_path / "missing.ply"}, "hint") == {"a": present}
     with pytest.raises(FileNotFoundError, match="hint"):
         existing_paths({"b": tmp_path / "missing.ply"}, "hint")
+
+
+def test_look_at_t_cam_world_puts_target_on_optical_axis() -> None:
+    eye, target = np.array([0.4, -0.3, 0.5]), np.array([0.0, 0.1, 0.0])
+    t_cam_world = look_at_t_cam_world(eye, target)
+    np.testing.assert_allclose(t_cam_world[:3, 3] + t_cam_world[:3, :3] @ eye, 0, atol=1e-12)
+    p_target_cam = t_cam_world[:3, :3] @ target + t_cam_world[:3, 3]
+    np.testing.assert_allclose(p_target_cam[:2], 0, atol=1e-12)
+    assert p_target_cam[2] == pytest.approx(np.linalg.norm(target - eye))

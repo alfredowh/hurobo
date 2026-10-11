@@ -183,3 +183,27 @@ def level_camera_rotation(heading_xy: np.ndarray, pitch_rad: float = 0.0) -> np.
     right /= np.linalg.norm(right)
     down = np.cross(forward, right)
     return np.column_stack([right, down, forward])
+
+
+def look_at_t_cam_world(eye_world: np.ndarray, target_world: np.ndarray) -> np.ndarray:
+    """T_cam_world of an OpenCV camera (+z forward, +y down) at `eye_world` looking at `target_world`.
+
+    World z is up.
+
+    Args:
+        eye_world: shape (3,), camera centre in the world frame.
+        target_world: shape (3,), point the optical axis passes through.
+
+    Returns:
+        4x4 world -> camera transform (the view matrix rasterisers and Open3D take).
+    """
+    forward = target_world - eye_world
+    forward = forward / np.linalg.norm(forward)
+    right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+    right /= np.linalg.norm(right)
+    down = np.cross(forward, right)
+    rotation = np.stack([right, down, forward])
+    t_cam_world = np.eye(4)
+    t_cam_world[:3, :3] = rotation
+    t_cam_world[:3, 3] = -rotation @ eye_world
+    return t_cam_world

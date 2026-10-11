@@ -22,6 +22,8 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
+from hurobo.utils.transforms import look_at_t_cam_world
+
 #: robosuite puts visual geoms in group 1 and collision geoms in group 0; only
 #: group 1 is drawn in the mesh layer, so collision proxies never leak into frames.
 _VISUAL_GEOM_GROUP = 1
@@ -222,6 +224,87 @@ def fit_gaussians_to_body(
     xy_offset = (body_lo + body_hi)[:2] / 2 - (splat_lo + splat_hi)[:2] / 2
     xyz = xyz + np.array([xy_offset[0], xy_offset[1], z_offset])
     return xyz.astype(np.float32), rot.astype(np.float32), scale.astype(np.float32)
+
+
+def splat_centre_and_radius(xyz: np.ndarray, opacity: np.ndarray) -> tuple[np.ndarray, float]:
+    """Robust centre and radius of a splat's solid part (floaters are excluded by opacity and percentiles).
+
+    Args:
+        xyz: shape (N, 3) Gaussian centres.
+        opacity: shape (N,) in [0, 1].
+
+    Returns:
+        (centre of the 2-98 percentile box, distance from it to that box's upper corner).
+    """
+    solid = xyz[opacity > 0.3]
+    lo, hi = np.percentile(solid, 2, axis=0), np.percentile(solid, 98, axis=0)
+    centre = (lo + hi) / 2
+    return centre, float(np.linalg.norm(hi - centre))
+
+
+@torch.no_grad()
+def render_splat_orbit(
+    ply_path: Path,
+    num_views: int = 12,
+    image_size: int = 256,
+    elevation_deg: float = 30.0,
+    background: float = 0.92,
+    device: str = "cuda",
+) -> list[np.ndarray]:
+    """Rasterise a splat (full anisotropic Gaussians, opacity and colour) from cameras orbiting its centre.
+
+    This is the splat as the compositor would draw it, not just its centres, so
+    the surface shape of the object is visible.
+
+    Args:
+        ply_path: 3DGS `.ply`, z-up, in the splat's own frame.
+        num_views: camera positions, evenly spaced in azimuth.
+        image_size: square output size in pixels.
+        elevation_deg: camera elevation above the splat's xy plane.
+        background: grey level in [0, 1] composited behind the splat.
+        device: torch device for rasterisation.
+
+    Returns:
+        `num_views` images, each (image_size, image_size, 3) uint8 RGB.
+    """
+    from gaussian_renderer import load_ply
+    from gsplat.rendering import rasterization
+
+    gaussians = load_ply(str(ply_path))
+    centre, radius = splat_centre_and_radius(gaussians.xyz, gaussians.opacity)
+    fov_deg = 40.0
+    focal = (image_size / 2) / np.tan(np.radians(fov_deg / 2))
+    distance = 1.3 * radius / np.tan(np.radians(fov_deg / 2))
+    elevation = np.radians(elevation_deg)
+
+    def to_dev(array: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(np.ascontiguousarray(array)).float().to(device)
+
+    k = to_dev(np.array([[focal, 0, image_size / 2], [0, focal, image_size / 2], [0, 0, 1.0]]))[None]
+    means, quats, scales = to_dev(gaussians.xyz), to_dev(gaussians.rot), to_dev(gaussians.scale)
+    opacities, colors = to_dev(gaussians.opacity), to_dev(gaussians.sh[:, :3])[:, None, :]
+
+    images = []
+    for azimuth in np.linspace(0, 2 * np.pi, num_views, endpoint=False):
+        eye_world = centre + distance * np.array(
+            [np.cos(elevation) * np.cos(azimuth), np.cos(elevation) * np.sin(azimuth), np.sin(elevation)]
+        )
+        render, alpha, _ = rasterization(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=to_dev(look_at_t_cam_world(eye_world, centre))[None],
+            Ks=k,
+            width=image_size,
+            height=image_size,
+            sh_degree=0,
+        )
+        # Premultiplied colour over a flat background.
+        over = render[0] + (1.0 - alpha[0]) * background
+        images.append((over.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+    return images
 
 
 def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:

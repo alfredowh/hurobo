@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -126,6 +128,47 @@ def splat_figure(
         for i, trace in enumerate(figure.data)
     ]
     figure.update_layout(**axis_layout(title), updatemenus=[{"buttons": buttons, "x": 0.0, "y": 1.0}])
+    return figure
+
+
+def orbit_figure(images: list[np.ndarray], title: str = "Splat orbit render", height: int = 560) -> go.Figure:
+    """Rendered orbit views as a slider-driven image, one frame per camera azimuth.
+
+    Args:
+        images: (H, W, 3) uint8 RGB views in azimuth order (see `hurobo.splat.render_splat_orbit`).
+        title: figure title.
+        height: figure height in pixels.
+
+    Returns:
+        A `go.Figure`; drag the slider to orbit the object.
+    """
+
+    def jpeg_trace(image: np.ndarray) -> go.Image:
+        # JPEG data URIs keep a many-view figure small enough to embed in a notebook.
+        ok, buffer = cv2.imencode(".jpg", image[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 90])
+        assert ok
+        return go.Image(source="data:image/jpeg;base64," + base64.b64encode(buffer.tobytes()).decode())
+
+    figure = go.Figure(
+        data=[jpeg_trace(images[0])],
+        frames=[go.Frame(data=[jpeg_trace(image)], name=str(i)) for i, image in enumerate(images)],
+    )
+    steps = [
+        {
+            "label": f"{round(360 * i / len(images))}°",
+            "method": "animate",
+            "args": [[str(i)], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}}],
+        }
+        for i in range(len(images))
+    ]
+    figure.update_layout(
+        title=title,
+        height=height,
+        margin={"l": 0, "r": 0, "t": 40, "b": 0},
+        sliders=[{"steps": steps, "currentvalue": {"prefix": "azimuth: "}}],
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+    )
     return figure
 
 

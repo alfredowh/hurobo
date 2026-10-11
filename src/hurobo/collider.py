@@ -20,6 +20,9 @@ import numpy as np
 import torch
 import trimesh
 
+from hurobo.splat import splat_centre_and_radius
+from hurobo.utils.transforms import look_at_t_cam_world
+
 
 @dataclass
 class GaussiansBodyFrame:
@@ -83,9 +86,7 @@ class SplatSurfaceExtractor:
         import open3d as o3d
         from gsplat.rendering import rasterization
 
-        solid = gaussians.xyz[gaussians.opacity > 0.3]
-        centre = (np.percentile(solid, 2, axis=0) + np.percentile(solid, 98, axis=0)) / 2
-        radius = float(np.linalg.norm(np.percentile(solid, 98, axis=0) - centre))
+        centre, radius = splat_centre_and_radius(gaussians.xyz, gaussians.opacity)
         fov_deg = 40.0
         focal = (self._image_size / 2) / np.tan(np.radians(fov_deg / 2))
         distance = 1.3 * radius / np.tan(np.radians(fov_deg / 2))
@@ -118,7 +119,7 @@ class SplatSurfaceExtractor:
                         np.sin(elevation),
                     ]
                 )
-                t_cam_world = _look_at(eye, centre)
+                t_cam_world = look_at_t_cam_world(eye, centre)
                 with torch.no_grad():
                     render, alpha, _ = rasterization(
                         means=means,
@@ -151,20 +152,6 @@ class SplatSurfaceExtractor:
             raise RuntimeError("depth fusion produced an empty mesh; is the splat opaque and non-empty?")
         pieces = mesh.split(only_watertight=False)
         return max(pieces, key=lambda m: len(m.faces))
-
-
-def _look_at(eye: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """4x4 world -> OpenCV-camera transform for a camera at `eye` looking at `target`, world z up."""
-    forward = target - eye
-    forward /= np.linalg.norm(forward)
-    right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
-    right /= np.linalg.norm(right)
-    down = np.cross(forward, right)
-    rotation = np.stack([right, down, forward])
-    t_cam_world = np.eye(4)
-    t_cam_world[:3, :3] = rotation
-    t_cam_world[:3, 3] = -rotation @ eye
-    return t_cam_world
 
 
 def decompose_convex(
