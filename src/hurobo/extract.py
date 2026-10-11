@@ -10,13 +10,13 @@ from typing import Protocol
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import GraspSegmenter, HumanDemo
-from ego2robo.hand import HandFrameResult, HandTcpTracker
-from ego2robo.markers import MarkerLayout, MarkerPoseEstimator
-from ego2robo.utils.signal import fill_short_gaps, resample_to_rate, smooth_trajectory
-from ego2robo.utils.transforms import apply_transform, invert_transform, make_transform
-from ego2robo.utils.video import read_frames_with_timestamps
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import GraspSegmenter, HumanDemo
+from hurobo.hand import HandFrameResult, HandTcpTracker
+from hurobo.markers import MarkerLayout, MarkerPoseEstimator
+from hurobo.utils.signal import fill_short_gaps, resample_to_rate, smooth_trajectory
+from hurobo.utils.transforms import apply_transform, invert_transform, make_transform
+from hurobo.utils.video import read_frames_with_timestamps
 
 
 class HandTracker(Protocol):

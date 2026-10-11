@@ -49,7 +49,7 @@ def check_libero_render() -> bool:
     """
     from PIL import Image
 
-    from ego2robo.sim import LiberoTask
+    from hurobo.sim import LiberoTask
 
     try:
         task = LiberoTask(suite_name="libero_goal", task_id=8)

@@ -12,11 +12,11 @@ import plotly.graph_objects as go
 from gaussian_renderer import load_ply
 from plotly.subplots import make_subplots
 
-from ego2robo.demo import GraspSegmenter
-from ego2robo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, polyline_with_breaks
+from hurobo.demo import GraspSegmenter
+from hurobo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, polyline_with_breaks
 
 if TYPE_CHECKING:
-    from ego2robo.hand import TrackedFrame
+    from hurobo.hand import TrackedFrame
 
 #: Zeroth spherical-harmonic basis constant: colour = 0.5 + C0 * f_dc.
 _SH_C0 = 0.28209479177387814

@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import GraspSegmenter
-from ego2robo.extract import DemoExtractor
-from ego2robo.hand import HandTcpTracker
-from ego2robo.markers import MarkerLayout, MarkerPoseEstimator
-from ego2robo.utils.synthetic import render_marker_clip
-from ego2robo.utils.transforms import look_at_origin_pose, make_transform
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import GraspSegmenter
+from hurobo.extract import DemoExtractor
+from hurobo.hand import HandTcpTracker
+from hurobo.markers import MarkerLayout, MarkerPoseEstimator
+from hurobo.utils.synthetic import render_marker_clip
+from hurobo.utils.transforms import look_at_origin_pose, make_transform
 
 CLIP_DIR = Path("data/raw/overview_gif/first_clip")
 MARKER_SIDE_M = 0.06

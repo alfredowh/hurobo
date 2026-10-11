@@ -8,9 +8,9 @@ import cv2
 import numpy as np
 import pytest
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.hand import HandTcpTracker
-from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
+from hurobo.camera import CameraIntrinsics
+from hurobo.hand import HandTcpTracker
+from hurobo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
 
 FRAMES_DIR = Path("data/raw/overview_gif/hand_moves_cube")
 

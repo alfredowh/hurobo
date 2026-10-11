@@ -11,9 +11,9 @@ import argparse
 import json
 from pathlib import Path
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import HumanDemo
-from ego2robo.human_dataset import export_human_dataset
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import HumanDemo
+from hurobo.human_dataset import export_human_dataset
 
 DEFAULT_TASK = "put the bowl on the plate"
 
@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("demos_dir", type=Path, help="directory with <clip>.npz and summary.json")
     parser.add_argument("--intrinsics", type=Path, default=Path("data/camera_intrinsics.npz"))
     parser.add_argument("--out", type=Path, default=Path("data/lerobot/human"))
-    parser.add_argument("--repo-id", default="local/ego2robo_human_demos")
+    parser.add_argument("--repo-id", default="local/hurobo_human_demos")
     parser.add_argument("--task", default=DEFAULT_TASK)
     parser.add_argument("--image-height", type=int, default=360)
     parser.add_argument("--image-width", type=int, default=640)

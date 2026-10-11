@@ -8,16 +8,16 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from scipy.spatial.transform import Rotation
 
-from ego2robo.demo import HumanDemo
-from ego2robo.human_dataset import (
+from hurobo.demo import HumanDemo
+from hurobo.human_dataset import (
     HumanDemoExporter,
     human_features,
     replay_tcp_from_action,
     sample_nearest_frames,
 )
-from ego2robo.recorder import LeRobotRecorder
-from ego2robo.utils.transforms import make_transform
-from ego2robo.utils.video import VideoWriter
+from hurobo.recorder import LeRobotRecorder
+from hurobo.utils.transforms import make_transform
+from hurobo.utils.video import VideoWriter
 
 SOURCE_FPS = 30.0
 IMAGE_SIZE_HW = (96, 128)

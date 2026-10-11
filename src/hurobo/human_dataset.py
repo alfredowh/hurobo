@@ -8,12 +8,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import HumanDemo
-from ego2robo.recorder import LeRobotRecorder, vector_feature, video_feature
-from ego2robo.utils.dashboard_video import SignalPanel, SyncedDashboard, write_dashboard_video
-from ego2robo.utils.transforms import transform_to_pos_quat_wxyz
-from ego2robo.utils.video import read_frames_with_timestamps
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import HumanDemo
+from hurobo.recorder import LeRobotRecorder, vector_feature, video_feature
+from hurobo.utils.dashboard_video import SignalPanel, SyncedDashboard, write_dashboard_video
+from hurobo.utils.transforms import transform_to_pos_quat_wxyz
+from hurobo.utils.video import read_frames_with_timestamps
 
 STATE_NAMES = ["tcp_x", "tcp_y", "tcp_z", "pinch_aperture"]
 # `action` has no robot behind it for human data: it is the human's next-step TCP
@@ -184,7 +184,7 @@ def export_human_dataset(
     task: str,
     image_size_hw: tuple[int, int] = (360, 640),
     fps: int = 20,
-    repo_id: str = "local/ego2robo_human_demos",
+    repo_id: str = "local/hurobo_human_demos",
     overwrite: bool = False,
 ) -> list[int]:
     """Write demos as one LeRobotDataset plus its metadata sidecar.

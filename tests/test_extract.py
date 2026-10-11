@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from ego2robo.demo import GraspSegmenter
-from ego2robo.extract import DemoExtractor, ExtractionConfig, ExtractionError
-from ego2robo.hand import HandFrameResult
-from ego2robo.utils.signal import fill_short_gaps
-from ego2robo.utils.transforms import apply_transform, invert_transform, make_transform
+from hurobo.demo import GraspSegmenter
+from hurobo.extract import DemoExtractor, ExtractionConfig, ExtractionError
+from hurobo.hand import HandFrameResult
+from hurobo.utils.signal import fill_short_gaps
+from hurobo.utils.transforms import apply_transform, invert_transform, make_transform
 
 FPS = 30.0
 DEPTH_ERROR = 1.25  # simulated MediaPipe hand-size error: depth too large by 25 %

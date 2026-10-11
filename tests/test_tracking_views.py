@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.hand import HandFrameResult, TrackedFrame
-from ego2robo.utils.dashboard_video import SyncedDashboard, tracking_dashboard, write_tracking_dashboard_video
-from ego2robo.utils.hand_landmarks import HAND_CONNECTIONS, INDEX_TIP, LANDMARK_NAMES, THUMB_TIP
-from ego2robo.utils.transforms import apply_transform, make_transform
-from ego2robo.utils.video import THUMB_BGR, draw_tcp_overlay, read_frames, write_tcp_overlay_video
-from ego2robo.utils.viewer import pinch_figure, tracking_figure
+from hurobo.camera import CameraIntrinsics
+from hurobo.hand import HandFrameResult, TrackedFrame
+from hurobo.utils.dashboard_video import SyncedDashboard, tracking_dashboard, write_tracking_dashboard_video
+from hurobo.utils.hand_landmarks import HAND_CONNECTIONS, INDEX_TIP, LANDMARK_NAMES, THUMB_TIP
+from hurobo.utils.transforms import apply_transform, make_transform
+from hurobo.utils.video import THUMB_BGR, draw_tcp_overlay, read_frames, write_tcp_overlay_video
+from hurobo.utils.viewer import pinch_figure, tracking_figure
 
 INTRINSICS = CameraIntrinsics.pinhole(160, 120, fy=150.0)
 

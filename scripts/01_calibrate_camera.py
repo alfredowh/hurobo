@@ -14,7 +14,7 @@ from pathlib import Path
 
 import cv2
 
-from ego2robo.camera import ChArUcoCalibrator
+from hurobo.camera import ChArUcoCalibrator
 
 BOARD_IMAGE_PATH = Path("data/charuco_board.png")
 INTRINSICS_PATH = Path("data/camera_intrinsics.npz")

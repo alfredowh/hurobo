@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ego2robo.utils.video import VideoWriter, read_frames
+from hurobo.utils.video import VideoWriter, read_frames
 
 
 def _codec(path: Path) -> str:

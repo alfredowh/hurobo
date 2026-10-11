@@ -11,7 +11,7 @@ from typing import Any
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-SIDECAR_NAME = "ego2robo_meta.json"
+SIDECAR_NAME = "hurobo_meta.json"
 
 
 def video_feature(height: int, width: int) -> dict[str, Any]:
@@ -112,10 +112,10 @@ class LeRobotRecorder:
         return self._num_episodes - 1
 
     def write_sidecar(self, metadata: dict[str, Any]) -> None:
-        """Write ego2robo-specific metadata (calibration, thresholds, provenance) next to the data.
+        """Write hurobo-specific metadata (calibration, thresholds, provenance) next to the data.
 
         Args:
-            metadata: JSON-serialisable dict, saved as `ego2robo_meta.json` in the root.
+            metadata: JSON-serialisable dict, saved as `hurobo_meta.json` in the root.
         """
         (self._root / SIDECAR_NAME).write_text(json.dumps(metadata, indent=2))
 

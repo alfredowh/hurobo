@@ -486,7 +486,7 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/c3/c5fea892e18631721a7d7e492a790bde8e3dc930861866bedb38762d0d7c/egl_probe-1.0.2.tar.gz", hash = "sha256:29bdca7b08da1e060cfb42cd46af8300a7ac4f3b1b2eeb16e545ea16d9a5ac93", size = 217495, upload-time = "2021-07-16T08:50:18.481Z" }
 
 [[package]]
-name = "ego2robo"
+name = "hurobo"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

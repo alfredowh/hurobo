@@ -30,11 +30,11 @@ MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace example
 ## Conventions for new notebooks
 
 - Name `NN_topic.ipynb`, numbered in order; add a row to the table above.
-- First cell: `from ego2robo.utils.notebook import setup_notebook` then `ROOT = setup_notebook()` (repo root, headless GL).
-- Import from `src/ego2robo`; never define a function or class in a notebook and never copy code between notebooks. Anything a cell needs beyond a few lines of glue goes into a shared module in the same change:
-  - interactive plotly views: `ego2robo.utils.viewer` (return a `go.Figure`, call `.show()` in the notebook);
-  - static matplotlib figures: `ego2robo.utils.plotting` (return a `Figure`);
-  - stand-in/synthetic inputs: `ego2robo.utils.synthetic` (`StandInScene`, `synthetic_aperture_trace`);
-  - pose maths: `ego2robo.utils.transforms`; everything else in its domain module.
+- First cell: `from hurobo.utils.notebook import setup_notebook` then `ROOT = setup_notebook()` (repo root, headless GL).
+- Import from `src/hurobo`; never define a function or class in a notebook and never copy code between notebooks. Anything a cell needs beyond a few lines of glue goes into a shared module in the same change:
+  - interactive plotly views: `hurobo.utils.viewer` (return a `go.Figure`, call `.show()` in the notebook);
+  - static matplotlib figures: `hurobo.utils.plotting` (return a `Figure`);
+  - stand-in/synthetic inputs: `hurobo.utils.synthetic` (`StandInScene`, `synthetic_aperture_trace`);
+  - pose maths: `hurobo.utils.transforms`; everything else in its domain module.
 - Say in the intro which module it demonstrates and what is stand-in or synthetic data.
 - Execute before committing, and keep stored outputs small (subsample point clouds, downscale images).

@@ -8,3 +8,7 @@ __pycache__/
 *.egg-info/
 .ruff_cache/
 .pytest_cache/
+CLAUDE.md
+ICL_IDEAS.md
+PLAN.md
+REAL2SIM_IDEAS.md

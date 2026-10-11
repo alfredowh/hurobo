@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ego2robo.utils.viewer import aperture_figure, state_action_figure, trajectory_figure
+from hurobo.utils.viewer import aperture_figure, state_action_figure, trajectory_figure
 
 NUM_SAMPLES = 50
 

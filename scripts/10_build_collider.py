@@ -21,7 +21,7 @@ import numpy as np
 import trimesh
 from gaussian_renderer import load_ply
 
-from ego2robo.collider import (
+from hurobo.collider import (
     GaussiansBodyFrame,
     SplatSurfaceExtractor,
     build_asset_overlay,
@@ -30,8 +30,8 @@ from ego2robo.collider import (
     patch_object_xml,
     rim_grasp_offset,
 )
-from ego2robo.sim import LiberoTask
-from ego2robo.splat import SplatAsset, SplatFit, body_visual_aabb, fit_gaussians_to_body
+from hurobo.sim import LiberoTask
+from hurobo.splat import SplatAsset, SplatFit, body_visual_aabb, fit_gaussians_to_body
 
 
 def main() -> None:

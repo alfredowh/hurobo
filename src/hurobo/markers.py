@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.utils.transforms import invert_transform, rvec_tvec_to_transform
+from hurobo.camera import CameraIntrinsics
+from hurobo.utils.transforms import invert_transform, rvec_tvec_to_transform
 
 
 @dataclass

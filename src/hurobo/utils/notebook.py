@@ -17,9 +17,9 @@ def find_project_root(start: Path | None = None) -> Path:
     """
     here = (start or Path.cwd()).resolve()
     for candidate in (here, *here.parents):
-        if (candidate / "pyproject.toml").exists() and (candidate / "src/ego2robo").is_dir():
+        if (candidate / "pyproject.toml").exists() and (candidate / "src/hurobo").is_dir():
             return candidate
-    raise RuntimeError(f"no ego2robo checkout found above {here}")
+    raise RuntimeError(f"no hurobo checkout found above {here}")
 
 
 def setup_notebook(mujoco_gl: str = "egl") -> Path:

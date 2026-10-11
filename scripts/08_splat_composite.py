@@ -19,18 +19,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ego2robo.collider import use_assets_dir
-from ego2robo.control import Waypoint, WaypointFollower
-from ego2robo.sim import LiberoTask
-from ego2robo.splat import (
+from hurobo.collider import use_assets_dir
+from hurobo.control import Waypoint, WaypointFollower
+from hurobo.sim import LiberoTask
+from hurobo.splat import (
     LIBERO_GOAL_DISTRACTOR_ROOTS,
     CompositeFrame,
     SplatCompositor,
     SplatFit,
     build_assets,
 )
-from ego2robo.utils.video import VideoWriter
-from ego2robo.utils.video import caption_frame as label
+from hurobo.utils.video import VideoWriter
+from hurobo.utils.video import caption_frame as label
 
 #: Rim grasp of the akita bowl: fingers open along world y, so grasp the wall on
 #: the +y side where it runs along x. Values read off the bowl's visual AABB

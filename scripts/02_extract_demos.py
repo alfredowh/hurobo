@@ -13,11 +13,11 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import GraspSegmenter
-from ego2robo.extract import ClipReport, ExtractionError, extract_demo
-from ego2robo.markers import MarkerLayout
-from ego2robo.utils.plotting import plot_3d_trajectory, plot_aperture_trace
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import GraspSegmenter
+from hurobo.extract import ClipReport, ExtractionError, extract_demo
+from hurobo.markers import MarkerLayout
+from hurobo.utils.plotting import plot_3d_trajectory, plot_aperture_trace
 
 
 def parse_args() -> argparse.Namespace:

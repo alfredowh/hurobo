@@ -13,8 +13,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ego2robo.sim import LiberoTask, ObjectPose
-from ego2robo.utils.transforms import cv_camera_pose_to_mujoco, transform_to_pos_quat_wxyz
+from hurobo.sim import LiberoTask, ObjectPose
+from hurobo.utils.transforms import cv_camera_pose_to_mujoco, transform_to_pos_quat_wxyz
 
 #: Sim table top surface height in world z (robosuite's default LIBERO table:
 #: body origin at z=0.875, half-thickness 0.025 -> top at 0.9). Verified by

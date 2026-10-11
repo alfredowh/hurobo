@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from ego2robo.utils.hand_landmarks import HAND_CONNECTIONS, INDEX_CHAIN, INDEX_TIP, THUMB_CHAIN, THUMB_TIP
+from hurobo.utils.hand_landmarks import HAND_CONNECTIONS, INDEX_CHAIN, INDEX_TIP, THUMB_CHAIN, THUMB_TIP
 
 if TYPE_CHECKING:
-    from ego2robo.camera import CameraIntrinsics
-    from ego2robo.hand import TrackedFrame
+    from hurobo.camera import CameraIntrinsics
+    from hurobo.hand import TrackedFrame
 
 
 def read_frames(video_path: Path) -> Iterator[np.ndarray]:

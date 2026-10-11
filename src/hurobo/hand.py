@@ -20,16 +20,16 @@ import numpy as np
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision as mp_vision
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
-from ego2robo.utils.transforms import apply_transform, rvec_tvec_to_transform
-from ego2robo.utils.video import read_frames_with_timestamps
+from hurobo.camera import CameraIntrinsics
+from hurobo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
+from hurobo.utils.transforms import apply_transform, rvec_tvec_to_transform
+from hurobo.utils.video import read_frames_with_timestamps
 
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/latest/hand_landmarker.task"
 )
-_DEFAULT_MODEL_PATH = Path.home() / ".cache" / "ego2robo" / "hand_landmarker.task"
+_DEFAULT_MODEL_PATH = Path.home() / ".cache" / "hurobo" / "hand_landmarker.task"
 
 
 def ensure_model_downloaded(model_path: Path = _DEFAULT_MODEL_PATH) -> Path:

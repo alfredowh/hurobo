@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ego2robo.utils.video import read_frames
+from hurobo.utils.video import read_frames
 
 
 def sharpness(image_bgr: np.ndarray) -> float:

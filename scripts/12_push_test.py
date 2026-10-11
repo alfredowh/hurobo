@@ -25,17 +25,17 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ego2robo.collider import use_assets_dir
-from ego2robo.control import Waypoint, WaypointFollower
-from ego2robo.sim import LiberoTask, ObjectPose
-from ego2robo.splat import (
+from hurobo.collider import use_assets_dir
+from hurobo.control import Waypoint, WaypointFollower
+from hurobo.sim import LiberoTask, ObjectPose
+from hurobo.splat import (
     LIBERO_GOAL_DISTRACTOR_ROOTS,
     SplatCompositor,
     SplatFit,
     build_assets,
 )
-from ego2robo.utils.plotting import plot_push_traces
-from ego2robo.utils.video import VideoWriter, caption_frame, read_frames
+from hurobo.utils.plotting import plot_push_traces
+from hurobo.utils.video import VideoWriter, caption_frame, read_frames
 
 BOWL_JOINT = "akita_black_bowl_1_joint0"
 BOWL_BODY = "akita_black_bowl_1_main"

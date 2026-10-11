@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.scan import PosedImage, SfmResult, object_frame_from_orbit
-from ego2robo.utils.notebook import existing_paths, find_project_root
-from ego2robo.utils.synthetic import synthetic_aperture_trace
-from ego2robo.utils.transforms import look_at_origin_pose, make_transform, pose_error
+from hurobo.camera import CameraIntrinsics
+from hurobo.scan import PosedImage, SfmResult, object_frame_from_orbit
+from hurobo.utils.notebook import existing_paths, find_project_root
+from hurobo.utils.synthetic import synthetic_aperture_trace
+from hurobo.utils.transforms import look_at_origin_pose, make_transform, pose_error
 
 
 def test_pinhole_intrinsics_fovy_and_projection() -> None:
@@ -71,7 +71,7 @@ def test_synthetic_aperture_trace_has_one_grasp() -> None:
 
 def test_project_root_and_existing_paths(tmp_path: Path) -> None:
     root = find_project_root(Path(__file__).parent)
-    assert (root / "src/ego2robo").is_dir()
+    assert (root / "src/hurobo").is_dir()
     present = tmp_path / "a.ply"
     present.touch()
     assert existing_paths({"a": present, "b": tmp_path / "missing.ply"}, "hint") == {"a": present}

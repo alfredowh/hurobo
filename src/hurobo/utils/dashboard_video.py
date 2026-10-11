@@ -12,13 +12,13 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
-from ego2robo.demo import GraspSegmenter
-from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP, polyline_with_breaks
-from ego2robo.utils.video import VideoWriter, draw_tcp_overlay
+from hurobo.demo import GraspSegmenter
+from hurobo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP, polyline_with_breaks
+from hurobo.utils.video import VideoWriter, draw_tcp_overlay
 
 if TYPE_CHECKING:
-    from ego2robo.camera import CameraIntrinsics
-    from ego2robo.hand import TrackedFrame
+    from hurobo.camera import CameraIntrinsics
+    from hurobo.hand import TrackedFrame
 
 _BLUE, _RED, _GREY = "royalblue", "crimson", "0.7"
 _THUMB, _INDEX = "darkorange", "green"  # same hues as the image overlay

@@ -23,8 +23,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ego2robo.camera import ChArUcoCalibrator
-from ego2robo.scan import (
+from hurobo.camera import ChArUcoCalibrator
+from hurobo.scan import (
     ChArUcoAligner,
     CropCylinder,
     KeyframeSampler,

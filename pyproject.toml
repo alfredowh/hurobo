@@ -1,5 +1,5 @@
 [project]
-name = "ego2robo"
+name = "hurobo"
 version = "0.1.0"
 description = "Phone video to robot policy: real2sim retargeting and LIBERO demo generation"
 readme = "README.md"
@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ego2robo = "ego2robo:main"
+hurobo = "hurobo:main"
 
 [dependency-groups]
 dev = [

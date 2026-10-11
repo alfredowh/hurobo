@@ -9,12 +9,12 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from ego2robo.camera import CameraIntrinsics
-from ego2robo.demo import HumanDemo
-from ego2robo.extract import ClipReport, extract_demo
-from ego2robo.markers import MarkerLayout
-from ego2robo.utils.transforms import invert_transform, look_at_origin_pose, make_transform
-from ego2robo.utils.video import VideoWriter
+from hurobo.camera import CameraIntrinsics
+from hurobo.demo import HumanDemo
+from hurobo.extract import ClipReport, extract_demo
+from hurobo.markers import MarkerLayout
+from hurobo.utils.transforms import invert_transform, look_at_origin_pose, make_transform
+from hurobo.utils.video import VideoWriter
 
 _PAD_FRACTION = 0.25  # white quiet zone around the marker, as a fraction of its side
 
