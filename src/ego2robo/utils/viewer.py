@@ -398,6 +398,153 @@ def aperture_figure(
     return figure
 
 
+def state_action_figure(
+    timestamps_s: np.ndarray,
+    state: np.ndarray,
+    action: np.ndarray,
+    state_names: list[str],
+    action_names: list[str],
+    pairs: list[tuple[str, str]],
+    replayed_state: dict[str, np.ndarray] | None = None,
+    hysteresis_m: tuple[float, float] | None = None,
+    title: str = "observation.state vs action, per channel",
+) -> go.Figure:
+    """One row per (state, action) channel pair: the state curve with its action overlaid.
+
+    Left axis is the state in mm; right axis is the action (mm per step for a displacement,
+    a 0/1 step line for a flag). A displacement action is the *derivative* of its state, so
+    the two curves only look alike once the action is integrated: `replayed_state` draws that.
+
+    Args:
+        timestamps_s: shape (N,), seconds.
+        state: shape (N, S), lengths in metres.
+        action: shape (N, A), displacements in metres per step, or 0/1 flags.
+        state_names: names of the `state` columns.
+        action_names: names of the `action` columns.
+        pairs: (state name, action name) per row.
+        replayed_state: optional {state name: shape (N,) metres} drawn dashed over that state.
+        hysteresis_m: optional (close, open) band drawn on rows whose action is a flag.
+        title: figure title.
+
+    Returns:
+        A `go.Figure` with shared time axis; hover shows time, sample index and value.
+    """
+    to_mm = 1000.0
+    figure = make_subplots(
+        rows=len(pairs),
+        cols=1,
+        shared_xaxes=True,
+        specs=[[{"secondary_y": True}]] * len(pairs),
+        vertical_spacing=0.05,
+    )
+    sample_idx = np.arange(len(timestamps_s))
+    hover = "t=%{x:.2f} s<br>sample %{customdata}<br>%{y:.2f}<extra>%{fullData.name}</extra>"
+    for row, (state_name, action_name) in enumerate(pairs, start=1):
+        first = row == 1
+        state_mm = state[:, state_names.index(state_name)] * to_mm
+        action_col = action[:, action_names.index(action_name)]
+        is_flag = bool(np.isin(action_col, (0.0, 1.0)).all())
+        figure.add_trace(
+            go.Scatter(
+                x=timestamps_s,
+                y=state_mm,
+                mode="lines+markers",
+                name="observation.state",
+                legendgroup="state",
+                showlegend=first,
+                line={"color": "royalblue"},
+                customdata=sample_idx,
+                hovertemplate=hover,
+            ),
+            row=row,
+            col=1,
+        )
+        if replayed_state and state_name in replayed_state:
+            figure.add_trace(
+                go.Scatter(
+                    x=timestamps_s,
+                    y=replayed_state[state_name] * to_mm,
+                    mode="lines",
+                    name="state[0] + cumsum(action)",
+                    legendgroup="replay",
+                    showlegend=first,
+                    line={"color": "black", "dash": "dash"},
+                    customdata=sample_idx,
+                    hovertemplate=hover,
+                ),
+                row=row,
+                col=1,
+            )
+        if is_flag:
+            figure.add_trace(
+                go.Scatter(
+                    x=timestamps_s,
+                    y=action_col,
+                    mode="lines",
+                    name="action (flag)",
+                    legendgroup="flag",
+                    line={"color": "crimson", "shape": "hv"},
+                    customdata=sample_idx,
+                    hovertemplate=hover,
+                ),
+                row=row,
+                col=1,
+                secondary_y=True,
+            )
+            if hysteresis_m is not None:
+                for edge_m in hysteresis_m:
+                    figure.add_hline(
+                        y=edge_m * to_mm,
+                        line={"color": "gray", "dash": "dot", "width": 1},
+                        row=row,
+                        col=1,
+                    )
+            figure.update_yaxes(title_text="mm", row=row, col=1, secondary_y=False)
+            figure.update_yaxes(
+                title_text="flag", range=[-0.1, 1.1], row=row, col=1, secondary_y=True, showgrid=False
+            )
+        else:
+            figure.add_trace(
+                go.Bar(
+                    x=timestamps_s,
+                    y=action_col * to_mm,
+                    name="action (mm / step)",
+                    legendgroup="delta",
+                    showlegend=first,
+                    marker={"color": "darkorange", "opacity": 0.45},
+                    customdata=sample_idx,
+                    hovertemplate=hover,
+                ),
+                row=row,
+                col=1,
+                secondary_y=True,
+            )
+            figure.update_yaxes(title_text="mm", row=row, col=1, secondary_y=False)
+            figure.update_yaxes(title_text="mm / step", row=row, col=1, secondary_y=True, showgrid=False)
+        figure.add_annotation(
+            text=f"<b>{state_name}</b> vs <b>{action_name}</b>",
+            xref="x domain",
+            yref="y domain",
+            x=0.0,
+            y=1.0,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            row=row,
+            col=1,
+        )
+    figure.update_xaxes(title_text="time [s]", row=len(pairs), col=1)
+    figure.update_layout(
+        title=title,
+        height=220 * len(pairs) + 110,
+        margin={"l": 60, "r": 60, "t": 60, "b": 40},
+        hovermode="x unified",
+        bargap=0.3,
+        legend={"orientation": "h", "y": 1.0, "yanchor": "bottom"},
+    )
+    return figure
+
+
 def tracking_figure(tracked: list[TrackedFrame], title: str = "Hand tracking per frame") -> go.Figure:
     """TCP depth, pinch aperture and PnP reprojection error over a tracked clip, interactive.
 

@@ -20,6 +20,13 @@ STATE_NAMES = ["tcp_x", "tcp_y", "tcp_z", "pinch_aperture"]
 # displacement plus the grasp flag, the same quantities the retargeter consumes.
 ACTION_NAMES = ["d_tcp_x", "d_tcp_y", "d_tcp_z", "grasp"]
 POSE_NAMES = ["x", "y", "z", "qw", "qx", "qy", "qz"]
+# Which action channel is the "next step" of which state channel, for overlay plots.
+STATE_ACTION_PAIRS = [
+    ("tcp_x", "d_tcp_x"),
+    ("tcp_y", "d_tcp_y"),
+    ("tcp_z", "d_tcp_z"),
+    ("pinch_aperture", "grasp"),
+]
 
 
 def human_features(image_height: int, image_width: int) -> dict:
@@ -219,6 +226,24 @@ def read_episode_vectors(dataset, num_frames: int, start: int = 0) -> tuple[np.n
     state = np.stack([f["observation.state"].numpy() for f in frames])
     action = np.stack([f["action"].numpy() for f in frames])
     return state, action
+
+
+def replay_tcp_from_action(state: np.ndarray, action: np.ndarray) -> dict[str, np.ndarray]:
+    """Integrate the displacement actions from the first state, to check they reproduce `observation.state`.
+
+    Args:
+        state: shape (N, 4), `observation.state` of one episode (`STATE_NAMES` order).
+        action: shape (N, 4), `action` of the same episode (`ACTION_NAMES` order).
+
+    Returns:
+        {"tcp_x": ..., "tcp_y": ..., "tcp_z": ...}, each shape (N,): `state[0]` plus the
+        running sum of the displacements of the *previous* samples, so row i is where
+        the actions say the hand is at sample i.
+    """
+    steps = action[:, [ACTION_NAMES.index(f"d_{name}") for name in STATE_NAMES[:3]]]
+    moved = np.vstack([np.zeros((1, 3)), np.cumsum(steps[:-1], axis=0)])
+    replayed = state[0, :3] + moved
+    return {name: replayed[:, i] for i, name in enumerate(STATE_NAMES[:3])}
 
 
 def episode_dashboard(

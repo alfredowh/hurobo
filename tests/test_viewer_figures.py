@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ego2robo.utils.viewer import aperture_figure, trajectory_figure
+from ego2robo.utils.viewer import aperture_figure, state_action_figure, trajectory_figure
 
 NUM_SAMPLES = 50
 
@@ -53,3 +53,32 @@ def test_aperture_figure_omits_missing_events() -> None:
     timestamps_s = np.linspace(0.0, 1.0, NUM_SAMPLES)
     figure = aperture_figure(timestamps_s, np.full(NUM_SAMPLES, 0.04), 0.03, 0.05)
     assert len(figure.data) == 2
+
+
+def test_state_action_figure_overlays_each_pair_and_marks_flags() -> None:
+    timestamps_s = np.linspace(0.0, 1.0, NUM_SAMPLES)
+    state = np.column_stack([np.linspace(0.0, 0.2, NUM_SAMPLES), np.full(NUM_SAMPLES, 0.04)])
+    flag = (np.arange(NUM_SAMPLES) > 20).astype(float)
+    action = np.column_stack([np.full(NUM_SAMPLES, 0.2 / (NUM_SAMPLES - 1)), flag])
+    figure = state_action_figure(
+        timestamps_s,
+        state,
+        action,
+        ["tcp_x", "aperture"],
+        ["d_tcp_x", "grasp"],
+        [("tcp_x", "d_tcp_x"), ("aperture", "grasp")],
+        replayed_state={"tcp_x": state[:, 0]},
+        hysteresis_m=(0.03, 0.05),
+    )
+    names = [trace.name for trace in figure.data]
+    assert names == [
+        "observation.state",
+        "state[0] + cumsum(action)",
+        "action (mm / step)",
+        "observation.state",
+        "action (flag)",
+    ]
+    assert np.allclose(figure.data[0].y, state[:, 0] * 1000)
+    assert np.allclose(figure.data[2].y, action[:, 0] * 1000)
+    assert list(figure.data[4].y) == list(flag)
+    assert len(figure.layout.shapes) == 2  # the two hysteresis edges, only on the flag row

@@ -9,7 +9,12 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from scipy.spatial.transform import Rotation
 
 from ego2robo.demo import HumanDemo
-from ego2robo.human_dataset import HumanDemoExporter, human_features, sample_nearest_frames
+from ego2robo.human_dataset import (
+    HumanDemoExporter,
+    human_features,
+    replay_tcp_from_action,
+    sample_nearest_frames,
+)
 from ego2robo.recorder import LeRobotRecorder
 from ego2robo.utils.transforms import make_transform
 from ego2robo.utils.video import VideoWriter
@@ -92,3 +97,12 @@ def test_roundtrip_two_episodes(tmp_path: Path) -> None:
     bowl_pose = dataset[0]["observation.bowl_pose"].numpy()
     np.testing.assert_allclose(bowl_pose[:3], [0.1, 0.0, 0.0], atol=1e-6)
     np.testing.assert_allclose(np.linalg.norm(bowl_pose[3:]), 1.0, atol=1e-5)
+
+
+def test_integrating_actions_reproduces_state(tmp_path: Path) -> None:
+    demo = _demo(tmp_path / "unused.mp4", 0.0, 12)
+    demo.tcp_pos_table[:, 1] = np.sin(np.arange(12) / 3.0)  # a non-monotonic y, unlike the default ramp
+    vectors = HumanDemoExporter.demo_to_vectors(demo)
+    replayed = replay_tcp_from_action(vectors["state"], vectors["action"])
+    for i, name in enumerate(("tcp_x", "tcp_y", "tcp_z")):
+        np.testing.assert_allclose(replayed[name], vectors["state"][:, i], atol=1e-6)

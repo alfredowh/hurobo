@@ -9,7 +9,7 @@ One notebook per capability of this workspace. Each is self-contained, runs top 
 | [03_splat_composite](03_splat_composite.ipynb) | Splats composited into LIBERO by depth: layers, and splats following moved bodies | GPU, EGL (DISCOVERSE stand-in splats are downloaded on first run into `data/splats/dummy_discoverse/`) |
 | [04_frames_and_calibration](04_frames_and_calibration.ipynb) | Frame conventions, camera intrinsics → MuJoCo FOV, ChArUco board, grasp segmentation | nothing |
 | [05_hand_tracking](05_hand_tracking.ipynb) | MediaPipe + PnP hand TCP (interactive per-frame curves, overlay video, whole-hand overlay, interactive pinch-aperture step-through, synced overlay + 3D hand + aperture video), ArUco table/bowl/plate poses vs ground truth, `DemoExtractor` QC report | `data/raw/overview_gif/first_clip/` (stand-in clip) |
-| [06_lerobot_recording](06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload (schema, video, state/action, sidecar, synced episode video) | same stand-in clip |
+| [06_lerobot_recording](06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload (schema, video, state/action, state-vs-action overlay, sidecar, synced episode video) | same stand-in clip |
 
 The `data/` inputs are produced by `scripts/08_splat_composite.py` and `scripts/09_scan_object.py` (they are not committed).
 
