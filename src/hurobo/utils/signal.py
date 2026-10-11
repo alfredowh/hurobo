@@ -120,3 +120,34 @@ def interpolate_pose_linear(fraction: np.ndarray, pos_a: np.ndarray, pos_b: np.n
     """
     fraction = fraction.reshape(-1, 1)
     return pos_a[None, :] * (1 - fraction) + pos_b[None, :] * fraction
+
+
+class ExponentialSmoother:
+    """Causal low-pass filter for a stream of vectors (the batch pipeline uses Savitzky-Golay instead).
+
+    A filter that looks at future samples cannot run live; this one trades some lag for
+    jitter suppression. `alpha` is the weight of the newest sample.
+    """
+
+    def __init__(self, alpha: float = 0.5) -> None:
+        """Set the smoothing weight.
+
+        Args:
+            alpha: in (0, 1]; 1 passes samples through unchanged, smaller is smoother and laggier.
+        """
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0, 1]")
+        self._alpha = alpha
+        self._value: np.ndarray | None = None
+
+    def update(self, sample: np.ndarray) -> np.ndarray:
+        """Feed one sample; returns the filtered value (the first sample is returned as is)."""
+        sample = np.asarray(sample, dtype=float)
+        self._value = (
+            sample if self._value is None else self._alpha * sample + (1 - self._alpha) * self._value
+        )
+        return self._value.copy()
+
+    def reset(self) -> None:
+        """Forget the history; the next sample starts a new track."""
+        self._value = None

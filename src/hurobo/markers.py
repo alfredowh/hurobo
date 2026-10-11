@@ -115,3 +115,29 @@ class MarkerPoseEstimator:
             t_cam_object = self._estimate_marker_pose(corners[role_idx], self._layout.object_marker_length_m)
             poses[role] = t_table_cam @ t_cam_object
         return poses
+
+
+def render_marker_image(
+    marker_id: int,
+    side_px: int = 700,
+    margin_px: int = 150,
+    dictionary: int = cv2.aruco.DICT_4X4_50,
+) -> np.ndarray:
+    """A printable marker: the black square plus the white quiet zone the detector needs.
+
+    Print it so the *black square* measures `MarkerLayout.table_marker_length_m` (10 cm for the
+    table marker by default): the metric scale of every pose comes from that number.
+
+    Args:
+        marker_id: id in the dictionary.
+        side_px: side of the black square in pixels.
+        margin_px: white border on each side.
+        dictionary: cv2.aruco predefined dictionary id.
+
+    Returns:
+        shape (side_px + 2 * margin_px,) * 2 uint8 grayscale image.
+    """
+    marker = cv2.aruco.generateImageMarker(cv2.aruco.getPredefinedDictionary(dictionary), marker_id, side_px)
+    return cv2.copyMakeBorder(
+        marker, margin_px, margin_px, margin_px, margin_px, cv2.BORDER_CONSTANT, value=255
+    )

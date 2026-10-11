@@ -123,11 +123,24 @@ class GraspSegmenter:
         is_grasping = np.zeros(len(pinch_aperture_m), dtype=bool)
         state = False
         for i, aperture in enumerate(pinch_aperture_m):
-            if not state and aperture < self._close_threshold_m:
-                state = True
-            elif state and aperture > self._open_threshold_m:
-                state = False
+            state = self.next_state(float(aperture), state)
             is_grasping[i] = state
+        return is_grasping
+
+    def next_state(self, aperture_m: float, is_grasping: bool) -> bool:
+        """One step of the hysteresis, for streaming use.
+
+        Args:
+            aperture_m: the newest thumb-index distance.
+            is_grasping: the state after the previous sample.
+
+        Returns:
+            The state after this sample.
+        """
+        if not is_grasping and aperture_m < self._close_threshold_m:
+            return True
+        if is_grasping and aperture_m > self._open_threshold_m:
+            return False
         return is_grasping
 
     @staticmethod

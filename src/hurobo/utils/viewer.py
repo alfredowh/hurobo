@@ -17,6 +17,7 @@ from hurobo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, po
 
 if TYPE_CHECKING:
     from hurobo.hand import TrackedFrame
+    from hurobo.teleop_app import TeleopTrace
 
 #: Zeroth spherical-harmonic basis constant: colour = 0.5 + C0 * f_dc.
 _SH_C0 = 0.28209479177387814
@@ -756,4 +757,92 @@ def pinch_figure(
             }
         ],
     )
+    return figure
+
+
+def trajectories_figure(paths: dict[str, np.ndarray], title: str = "Trajectories") -> go.Figure:
+    """Several 3D paths in one interactive figure, e.g. the same clip seen from different cameras.
+
+    Args:
+        paths: name -> (N, 3) positions in one common frame.
+        title: figure title.
+    """
+    figure = go.Figure(
+        [
+            go.Scatter3d(
+                x=xyz[:, 0],
+                y=xyz[:, 1],
+                z=xyz[:, 2],
+                mode="lines+markers",
+                name=name,
+                marker={"size": 2.5},
+                line={"width": 4},
+            )
+            for name, xyz in paths.items()
+        ]
+    )
+    figure.update_layout(**axis_layout(title))
+    return figure
+
+
+def teleop_tracking_figure(trace: TeleopTrace, title: str = "Teleoperation tracking") -> go.Figure:
+    """Commanded target vs achieved end effector per axis (relative to the start), error, and gripper.
+
+    Args:
+        trace: a finished run.
+        title: figure title.
+
+    Returns:
+        A `go.Figure` with three position rows and one error row; the dashed vertical line
+        marks the cube spawn, the shaded bands the commanded-closed periods.
+    """
+    t = np.asarray(trace.t_s)
+    target, eef = np.asarray(trace.p_world_target), np.asarray(trace.p_world_eef)
+    start = eef[0]
+    figure = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=("x (m)", "y (m)", "z (m)", "tracking error (cm)"),
+    )
+    for row in (1, 2, 3):
+        figure.add_scatter(
+            x=t,
+            y=target[:, row - 1] - start[row - 1],
+            name="target (hand)",
+            row=row,
+            col=1,
+            line={"color": "crimson"},
+            legendgroup="t",
+            showlegend=row == 1,
+        )
+        figure.add_scatter(
+            x=t,
+            y=eef[:, row - 1] - start[row - 1],
+            name="robot end effector",
+            row=row,
+            col=1,
+            line={"color": "royalblue"},
+            legendgroup="e",
+            showlegend=row == 1,
+        )
+    figure.add_scatter(
+        x=t,
+        y=100 * trace.tracking_error_m(),
+        name="error",
+        row=4,
+        col=1,
+        line={"color": "gray"},
+        showlegend=False,
+    )
+    closed = np.asarray(trace.gripper_closed, dtype=bool)
+    edges = np.flatnonzero(np.diff(np.concatenate([[False], closed, [False]]).astype(int)))
+    for first, last in zip(edges[::2], edges[1::2], strict=True):
+        figure.add_vrect(
+            x0=t[first], x1=t[min(last, len(t) - 1)], fillcolor="orange", opacity=0.15, line_width=0
+        )
+    if trace.cube_spawn_step is not None:
+        figure.add_vline(x=t[trace.cube_spawn_step], line_dash="dash", annotation_text="cube spawns")
+    figure.update_layout(title=title, height=720, xaxis4_title="sim time (s)")
     return figure

@@ -56,10 +56,10 @@ class LiberoTask:
     these in parallel worker processes instead, which keeps this class simple.
     """
 
-    #: Reused for the real2sim twin render (`twin.py`); chosen because the
-    #: default policy observation only uses "agentview"/"robot0_eye_in_hand",
-    #: so repointing this one doesn't disturb the training/eval cameras.
-    TWIN_CAMERA_NAME = "galleryview"
+    #: Reused for the real2sim twin render (`twin.py`, teleoperation). The policy observation
+    #: only uses "agentview"/"robot0_eye_in_hand", and "galleryview" (the whole-room view) is
+    #: kept stock for display, so the near-duplicate of the agentview is the one to repoint.
+    TWIN_CAMERA_NAME = "frontview"
 
     def __init__(
         self,
@@ -216,10 +216,12 @@ class LiberoTask:
             height: output image height in pixels.
 
         Returns:
-            shape (height, width, 3) uint8 RGB image.
+            shape (height, width, 3) uint8 RGB image, upright (robosuite returns GL
+            bottom-up images; this flips rows, unlike the 180-degree-rotated policy
+            observations the LeRobot wrapper produces).
         """
         image = self.sim.render(camera_name=camera_name, width=width, height=height)
-        return np.asarray(image)
+        return np.ascontiguousarray(np.asarray(image)[::-1])
 
     def set_camera_pose(
         self, camera_name: str, pos: np.ndarray, quat_wxyz: np.ndarray, fovy_degrees: float
@@ -248,6 +250,57 @@ class LiberoTask:
         # confirmed by hand: omitting it rendered from the camera's old
         # default pose instead of the one just assigned here.
         self.sim.forward()
+
+    def camera_pose_world(self, camera_name: str) -> np.ndarray:
+        """4x4 pose of a named camera in the world frame, MuJoCo camera axes (looks down -z).
+
+        Args:
+            camera_name: an existing camera name.
+        """
+        cam_idx = list(self.sim.model.camera_names).index(camera_name)
+        pose = np.eye(4)
+        pose[:3, :3] = np.array(self.mj_data.cam_xmat[cam_idx]).reshape(3, 3)
+        pose[:3, 3] = self.mj_data.cam_xpos[cam_idx]
+        return pose
+
+    @property
+    def model_xml(self) -> str:
+        """The current scene as MJCF text, for editing and `reload_model`."""
+        return self.sim.model.get_xml()
+
+    def reload_model(self, xml: str) -> None:
+        """Rebuild the sim from edited MJCF while keeping the current joint state of shared joints.
+
+        robosuite re-creates the sim and re-samples placements on reload, so the joint
+        positions (robot, objects) are saved by name and written back afterwards. The edit
+        lasts until the next `reset`, which rebuilds the stock task.
+
+        Args:
+            xml: scene MJCF, normally `model_xml` plus additions.
+        """
+        model = self.mj_model
+        saved = {
+            model.joint(j).name: self.mj_data.qpos[
+                model.jnt_qposadr[j] : model.jnt_qposadr[j] + (7 if model.jnt_type[j] == 0 else 1)
+            ].copy()
+            for j in range(model.njnt)
+        }
+        self._libero_env._env.env.reset_from_xml_string(xml)
+        new_model = self.mj_model
+        names = {new_model.joint(j).name for j in range(new_model.njnt)}
+        for name, qpos in saved.items():
+            if name in names:
+                self.sim.data.set_joint_qpos(name, qpos)
+        self.sim.forward()
+
+    def finger_opening_m(self, obs: dict) -> float:
+        """Distance between the two gripper fingertips' joint positions, summed (0 closed, ~0.08 open).
+
+        Args:
+            obs: an observation as returned by `reset`/`step`.
+        """
+        fingers = np.asarray(obs["robot_state"]["gripper"]["qpos"][0], dtype=float)
+        return float(abs(fingers[0]) + abs(fingers[1]))
 
     def close(self) -> None:
         """Close the underlying vector env."""

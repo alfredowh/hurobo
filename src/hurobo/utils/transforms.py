@@ -159,3 +159,27 @@ def look_at_origin_pose(position_table: np.ndarray) -> np.ndarray:
     right /= np.linalg.norm(right)
     down = np.cross(forward, right)
     return make_transform(Rotation.from_matrix(np.column_stack([right, down, forward])), position_table)
+
+
+def level_camera_rotation(heading_xy: np.ndarray, pitch_rad: float = 0.0) -> np.ndarray:
+    """R_world_cam for a camera that looks along a horizontal heading, optionally pitched down.
+
+    Gravity-aligned on purpose: the roll is zero, so image "up" stays world up however the
+    camera is pitched. A webcam on a laptop is level or tilted a little; a hand raised in
+    front of it should raise the robot, which is what this gives.
+
+    Args:
+        heading_xy: shape (2,), horizontal direction the camera looks along, in the world frame.
+        pitch_rad: downward tilt of the optical axis; 0 = looking horizontally.
+
+    Returns:
+        shape (3, 3), columns are the camera's (right, down, forward) axes (OpenCV convention)
+        expressed in the world frame.
+    """
+    heading = np.asarray(heading_xy, dtype=float)
+    heading = heading / np.linalg.norm(heading)
+    forward = np.array([heading[0] * np.cos(pitch_rad), heading[1] * np.cos(pitch_rad), -np.sin(pitch_rad)])
+    right = np.cross(forward, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    down = np.cross(forward, right)
+    return np.column_stack([right, down, forward])

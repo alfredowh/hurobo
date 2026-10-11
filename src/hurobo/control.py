@@ -99,13 +99,33 @@ class WaypointFollower:
             if self.done:
                 return np.zeros(7, dtype=np.float32)
             target = self._waypoints[self._current_idx]
-            pos_error = target.pos - current_pos
-            rot_error = (target.rot * current_rot.inv()).as_rotvec()
 
+        return self.action_toward(target, current_pos, current_rot)
+
+    def action_toward(
+        self, target: Waypoint, current_pos: np.ndarray, current_rot: Rotation, action_limit: float = 1.0
+    ) -> np.ndarray:
+        """Clipped relative action that moves the end effector toward `target`; no waypoint bookkeeping.
+
+        This is the whole control law of `step`, exposed for callers that stream their own
+        target every step (teleoperation) instead of handing over a waypoint list.
+
+        Args:
+            target: desired pose and gripper state.
+            current_pos: shape (3,), the sim end-effector's current position.
+            current_rot: scipy Rotation, the sim end-effector's current orientation.
+            action_limit: scales the largest commanded step, in (0, 1]; below 1 gives a gentler
+                arm (full scale commands the controller's maximum, which can destabilise it).
+
+        Returns:
+            shape (7,) float array in [-1, 1], same layout as `step`.
+        """
+        pos_error = target.pos - current_pos
+        rot_error = (target.rot * current_rot.inv()).as_rotvec()
         pos_delta = np.clip(pos_error, -self._max_pos_delta_m, self._max_pos_delta_m)
         rot_delta = np.clip(rot_error, -self._max_rot_delta_rad, self._max_rot_delta_rad)
-        pos_action = pos_delta / self._max_pos_delta_m
-        rot_action = rot_delta / self._max_rot_delta_rad
+        pos_action = action_limit * pos_delta / self._max_pos_delta_m
+        rot_action = action_limit * rot_delta / self._max_rot_delta_rad
         gripper_action = np.array([1.0 if target.gripper_closed else -1.0], dtype=np.float32)
 
         return np.concatenate([pos_action, rot_action, gripper_action]).astype(np.float32)

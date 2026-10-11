@@ -120,17 +120,25 @@ class StandInScene:
     PLATE_ID = 22
 
     @classmethod
-    def from_clip_dir(cls, clip_dir: Path, first_frame: int = 20) -> StandInScene:
+    def from_clip_dir(
+        cls,
+        clip_dir: Path,
+        first_frame: int = 20,
+        camera_position_table: tuple[float, float, float] = (0.0, -0.45, 0.40),
+    ) -> StandInScene:
         """The default stand-in: GIF frames of a real hand, camera 0.45 m in front, 0.4 m up.
 
         Args:
             clip_dir: folder of `.png` frames (800x450).
             first_frame: skip the frames before the hand enters the view.
+            camera_position_table: where the pretend camera sits in the table frame, looking at
+                the table origin. Changing it re-interprets the same pixels from another
+                viewpoint, which is how the camera-pose handling is exercised without a capture.
         """
         return cls(
             frame_paths=sorted(clip_dir.glob("*.png"))[first_frame:],
             intrinsics=CameraIntrinsics.pinhole(800, 450, 800.0),
-            t_table_cam=look_at_origin_pose(np.array([0.0, -0.45, 0.40])),
+            t_table_cam=look_at_origin_pose(np.array(camera_position_table, dtype=float)),
             t_table_bowl=make_transform(Rotation.from_euler("z", 20, degrees=True), [-0.12, 0.02, 0.0]),
             t_table_plate=make_transform(Rotation.from_euler("z", -10, degrees=True), [0.13, 0.04, 0.0]),
         )

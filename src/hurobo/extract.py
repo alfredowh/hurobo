@@ -45,6 +45,9 @@ class ExtractionConfig:
         layout_window_s: bowl/plate poses are taken from the first this-many seconds,
             before the hand occludes or moves them.
         smooth_window: Savitzky-Golay window (samples at `target_hz`, odd).
+        anchor_depth: scale the TCP depth so the grasp lands on the bowl marker. Turn it
+            off when the bowl marker is not where the hand actually grasps (stand-in clips,
+            teleoperation without a real bowl); depth then keeps MediaPipe's hand-size prior.
         anchor_scale_bounds: accepted range of the grasp-anchor depth scale; outside
             it the clip is flagged (the hand model or the intrinsics are off).
         min_hand_fraction: minimum share of frames with a hand detection, within the
@@ -57,6 +60,7 @@ class ExtractionConfig:
     max_gap_s: float = 0.4
     layout_window_s: float = 0.6
     smooth_window: int = 9
+    anchor_depth: bool = True
     anchor_scale_bounds: tuple[float, float] = (0.6, 1.6)
     min_hand_fraction: float = 0.85
     max_grasp_to_bowl_m: float = 0.10
@@ -226,7 +230,7 @@ class DemoExtractor:
         grasp_idx, release_idx = GraspSegmenter.find_transition_frames(is_grasping)
         report.grasp_found, report.release_found = grasp_idx is not None, release_idx is not None
 
-        if grasp_idx is not None:
+        if grasp_idx is not None and cfg.anchor_depth:
             tcp_cam_s, report.anchor_scale = self._anchor_correct(
                 tcp_cam_s, grasp_idx, t_cam_table, t_table_bowl
             )
