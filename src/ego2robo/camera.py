@@ -26,6 +26,23 @@ class CameraIntrinsics:
     image_width: int
     image_height: int
 
+    @classmethod
+    def pinhole(
+        cls, image_width: int, image_height: int, fy: float, fx: float | None = None
+    ) -> CameraIntrinsics:
+        """Distortion-free intrinsics with the principal point at the image centre.
+
+        Args:
+            image_width: pixel width.
+            image_height: pixel height.
+            fy: vertical focal length in pixels.
+            fx: horizontal focal length in pixels; defaults to `fy` (square pixels).
+        """
+        camera_matrix = np.array(
+            [[fx or fy, 0.0, image_width / 2], [0.0, fy, image_height / 2], [0.0, 0.0, 1.0]]
+        )
+        return cls(camera_matrix, np.zeros(5), image_width, image_height)
+
     @property
     def fx(self) -> float:
         """Focal length in pixels, x axis."""
@@ -45,6 +62,19 @@ class CameraIntrinsics:
         placing the sim's twin camera at the real camera's pose.
         """
         return float(2.0 * np.degrees(np.arctan2(self.image_height / 2.0, self.fy)))
+
+    def project(self, points_cam: np.ndarray) -> np.ndarray:
+        """Pixel coordinates of camera-frame points (OpenCV axes), ignoring lens distortion.
+
+        Args:
+            points_cam: shape (3,) or (N, 3), z > 0 in front of the camera.
+
+        Returns:
+            Shape (2,) or (N, 2) pixel coordinates (u, v).
+        """
+        homogeneous = np.atleast_2d(points_cam) @ self.camera_matrix.T
+        pixels = homogeneous[:, :2] / homogeneous[:, 2:3]
+        return pixels[0] if np.ndim(points_cam) == 1 else pixels
 
     def save(self, path: Path) -> None:
         """Save intrinsics to an .npz file."""
@@ -105,6 +135,31 @@ class ChArUcoCalibrator:
         self._all_corners: list[np.ndarray] = []
         self._all_ids: list[np.ndarray] = []
         self._image_size: tuple[int, int] | None = None
+
+    @property
+    def board(self) -> cv2.aruco.CharucoBoard:
+        """The board definition, shared with `scan.ChArUcoAligner` so both match the printout."""
+        return self._board
+
+    def generate_board_image(self, pixels_per_square: int = 200, margin_px: int = 40) -> np.ndarray:
+        """Render the board as a grayscale image, to print or show fullscreen.
+
+        Args:
+            pixels_per_square: resolution of one chessboard square, in pixels.
+                Higher values help detection at distance but make for a bigger
+                file; 200 is plenty for a laptop screen or a printed page.
+            margin_px: white border around the board, in pixels. A margin is
+                required so `detectBoard` doesn't lose corners that touch the
+                image edge.
+
+        Returns:
+            shape (H, W) uint8 image, aspect-matched to squares_x/squares_y.
+        """
+        size = (
+            self._board.getChessboardSize()[0] * pixels_per_square,
+            self._board.getChessboardSize()[1] * pixels_per_square,
+        )
+        return self._board.generateImage(size, marginSize=margin_px)
 
     def add_frame(self, image_bgr: np.ndarray) -> bool:
         """Detect the board in one frame and, if found, keep it for calibration.

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from ego2robo.camera import CameraIntrinsics
+    from ego2robo.hand import TrackedFrame
 
 
 def read_frames(video_path: Path) -> Iterator[np.ndarray]:
@@ -34,6 +41,43 @@ def read_frames(video_path: Path) -> Iterator[np.ndarray]:
         capture.release()
 
 
+def read_frames_with_timestamps(video_path: Path) -> Iterator[tuple[np.ndarray, float]]:
+    """Yield (BGR frame, presentation time in seconds) pairs from a video file.
+
+    Uses the container's per-frame timestamps rather than `index / fps`, because
+    phone clips are often variable frame rate and drift would otherwise leak into
+    every resampled trajectory.
+
+    Args:
+        video_path: path to a video file readable by OpenCV's backend.
+
+    Yields:
+        (frame, t_s): shape (H, W, 3) uint8 BGR frame and its time from the start
+        of the clip. Timestamps are forced strictly increasing (some backends
+        report 0 or repeat values for the first frames).
+
+    Raises:
+        RuntimeError: if the file can't be opened at all.
+    """
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    fallback_dt_s = 1.0 / (capture.get(cv2.CAP_PROP_FPS) or 30.0)
+    last_t_s = -fallback_dt_s
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                return
+            t_s = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if t_s <= last_t_s:
+                t_s = last_t_s + fallback_dt_s
+            last_t_s = t_s
+            yield frame, t_s
+    finally:
+        capture.release()
+
+
 def get_video_fps(video_path: Path) -> float:
     """Return a video's reported frame rate in Hz."""
     capture = cv2.VideoCapture(str(video_path))
@@ -44,29 +88,83 @@ def get_video_fps(video_path: Path) -> float:
 
 
 class VideoWriter:
-    """Thin wrapper around cv2.VideoWriter with a context-manager interface."""
+    """Writes BGR frames to an H.264/yuv420p .mp4 by piping them to ffmpeg.
+
+    H.264 rather than OpenCV's mp4v because Chromium-based viewers (VS Code,
+    Jupyter) refuse to play mp4v. Using the context manager is required: ffmpeg
+    only finalises the file on `close`.
+    """
 
     def __init__(self, path: Path, fps: float, frame_size: tuple[int, int]) -> None:
         """Open a video file for writing.
 
         Args:
-            path: output path; the container is inferred from the extension
-                (use .mp4 with the 'mp4v' fourcc, widely compatible without
-                extra codec installs).
+            path: output .mp4; parent directory must exist, an existing file is overwritten.
             fps: output frame rate in Hz.
             frame_size: (width, height) in pixels. Every frame passed to
                 `write` must match this exactly.
+
+        Raises:
+            RuntimeError: if `ffmpeg` is not on PATH.
         """
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self._writer = cv2.VideoWriter(str(path), fourcc, fps, frame_size)
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg not found on PATH; needed to write browser-playable video")
+        self._frame_size = frame_size
+        width, height = frame_size
+        command = [ffmpeg, "-y", "-loglevel", "error"]
+        command += [
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            str(fps),
+            "-i",
+            "-",
+        ]
+        # yuv420p subsamples chroma 2x2, so odd sizes are padded by one pixel instead of failing.
+        command += ["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+        command += ["-movflags", "+faststart", str(path)]
+        self._process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._closed = False
 
     def write(self, frame_bgr: np.ndarray) -> None:
-        """Append one BGR frame."""
-        self._writer.write(frame_bgr)
+        """Append one BGR frame.
+
+        Args:
+            frame_bgr: shape (height, width, 3) uint8, matching `frame_size`.
+
+        Raises:
+            ValueError: if the frame's size or dtype doesn't match the writer's.
+            RuntimeError: if ffmpeg exited early (its error output is included).
+        """
+        width, height = self._frame_size
+        if frame_bgr.shape != (height, width, 3) or frame_bgr.dtype != np.uint8:
+            raise ValueError(
+                f"expected a ({height}, {width}, 3) uint8 frame, got {frame_bgr.shape} {frame_bgr.dtype}"
+            )
+        try:
+            self._process.stdin.write(np.ascontiguousarray(frame_bgr).tobytes())
+        except BrokenPipeError:
+            self.close()
 
     def close(self) -> None:
-        """Flush and close the file. Safe to call more than once."""
-        self._writer.release()
+        """Flush and close the file. Safe to call more than once.
+
+        Raises:
+            RuntimeError: if ffmpeg failed; its error output is included.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        _, stderr = self._process.communicate()
+        if self._process.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg failed with exit code {self._process.returncode}:\n{stderr.decode(errors='replace')}"
+            )
 
     def __enter__(self) -> VideoWriter:
         return self
@@ -128,3 +226,62 @@ def alpha_composite(
     return (base_bgr.astype(np.float32) * (1 - mask_3ch) + overlay_bgr.astype(np.float32) * mask_3ch).astype(
         np.uint8
     )
+
+
+def draw_tcp_overlay(item: TrackedFrame, intrinsics: CameraIntrinsics) -> np.ndarray:
+    """Copy of a tracked frame with the detected TCP (red cross) and a time/aperture caption.
+
+    Args:
+        item: one `TrackedFrame`; a frame without a hand is captioned "no hand".
+        intrinsics: camera that filmed the clip, for projecting the TCP.
+
+    Returns:
+        shape (H, W, 3) BGR frame.
+    """
+    red, white = (0, 0, 255), (255, 255, 255)
+    frame = item.frame_bgr.copy()
+    caption = f"t={item.timestamp_s:.1f}s  no hand"
+    if item.result is not None:
+        u, v = intrinsics.project(item.result.tcp_pos_cam)
+        cv2.drawMarker(frame, (round(u), round(v)), red, cv2.MARKER_CROSS, 28, 3)
+        caption = f"t={item.timestamp_s:.1f}s  aperture={item.result.pinch_aperture_m * 100:.1f}cm"
+    cv2.putText(frame, caption, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(frame, caption, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, white, 2, cv2.LINE_AA)
+    return frame
+
+
+def write_tcp_overlay_video(
+    tracked: list[TrackedFrame], intrinsics: CameraIntrinsics, video_path: Path, fps: float
+) -> Path:
+    """Video of a tracked clip with the detected TCP (red cross) and a time/aperture caption.
+
+    Args:
+        tracked: output of `track_video`; frames without a hand are kept, captioned "no hand".
+        intrinsics: camera that filmed the clip, for projecting the TCP.
+        video_path: output .mp4 (H.264, browser-playable).
+        fps: playback rate; the clip's own frame rate plays it in real time.
+
+    Returns:
+        `video_path`.
+    """
+    size = (intrinsics.image_width, intrinsics.image_height)
+    with VideoWriter(video_path, fps, size) as writer:
+        for item in tracked:
+            writer.write(draw_tcp_overlay(item, intrinsics))
+    return video_path
+
+
+def caption_frame(image_rgb: np.ndarray, text: str) -> np.ndarray:
+    """Return a BGR copy of an RGB frame with a caption (outlined, for legibility) top-left.
+
+    Args:
+        image_rgb: shape (H, W, 3) uint8 RGB.
+        text: caption.
+
+    Returns:
+        shape (H, W, 3) uint8 BGR, ready for `VideoWriter` / `cv2.imwrite`.
+    """
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    cv2.putText(image_bgr, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(image_bgr, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+    return image_bgr

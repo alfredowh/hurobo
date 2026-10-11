@@ -131,3 +131,31 @@ def transform_to_pos_quat_wxyz(t_parent_child: np.ndarray) -> tuple[np.ndarray, 
     pos = t_parent_child[:3, 3].copy()
     x, y, z, w = Rotation.from_matrix(t_parent_child[:3, :3]).as_quat()
     return pos, np.array([w, x, y, z])
+
+
+def pose_error(t_estimated: np.ndarray, t_truth: np.ndarray) -> tuple[float, float]:
+    """Translation error (mm) and rotation error (deg) between two 4x4 poses in the same frame.
+
+    Args:
+        t_estimated: estimated 4x4 pose.
+        t_truth: ground-truth 4x4 pose.
+    """
+    mm = float(np.linalg.norm(t_estimated[:3, 3] - t_truth[:3, 3]) * 1000)
+    deg = float(np.degrees(Rotation.from_matrix(t_estimated[:3, :3].T @ t_truth[:3, :3]).magnitude()))
+    return mm, deg
+
+
+def look_at_origin_pose(position_table: np.ndarray) -> np.ndarray:
+    """T_table_cam for a camera at `position_table` looking at the table-frame origin (OpenCV axes).
+
+    Args:
+        position_table: shape (3,), camera position in the table frame (z up).
+
+    Returns:
+        4x4 transform T_table_cam.
+    """
+    forward = -position_table / np.linalg.norm(position_table)
+    right = np.cross(forward, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    down = np.cross(forward, right)
+    return make_transform(Rotation.from_matrix(np.column_stack([right, down, forward])), position_table)

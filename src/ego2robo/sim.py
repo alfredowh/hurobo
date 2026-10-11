@@ -125,6 +125,33 @@ class LiberoTask:
         """The underlying robosuite `MjSim` (model + data), for direct mujoco access."""
         return self._libero_env._env.sim
 
+    @property
+    def mj_model(self):
+        """The raw `mujoco.MjModel`, as `SplatCompositor` and `mujoco.Renderer` expect."""
+        return self.sim.model._model
+
+    @property
+    def mj_data(self):
+        """The raw `mujoco.MjData` of the current episode."""
+        return self.sim.data._data
+
+    @property
+    def controller_action_scale(self) -> tuple[float, float]:
+        """The OSC_POSE controller's per-step (position_m, rotation_rad) output scale.
+
+        robosuite's `scale_action` (base_controller.py) linearly maps an action
+        component in [-1, 1] to `[output_min, output_max]` *before* adding it to
+        the current pose (see `osc_pose.json`: output_max = (0.05, 0.05, 0.05,
+        0.5, 0.5, 0.5)). `WaypointFollower.step` (control.py) must divide its
+        desired metric delta by this real scale, not by its own clip bound —
+        using a smaller constant there would silently command a larger motion
+        than intended every step (verified against the installed robosuite
+        source, not assumed; see PLAN.md §1 fix 6 / §2 "frames are explicit").
+        """
+        controller = self._libero_env._env.robots[0].controller
+        output_max = np.asarray(controller.output_max, dtype=np.float64)
+        return float(output_max[0]), float(output_max[3])
+
     def get_eef_pose(self, obs: dict) -> tuple[np.ndarray, Rotation]:
         """Extract the current end-effector pose from an observation dict.
 
@@ -169,6 +196,16 @@ class LiberoTask:
         qpos = np.concatenate([pose.pos, _scipy_rotation_to_wxyz(pose.rot)])
         self.sim.data.set_joint_qpos(joint_name, qpos)
         self.sim.forward()
+
+    def translate_object(self, joint_name: str, delta_world: np.ndarray) -> None:
+        """Shift a free-jointed object by `delta_world` metres, keeping its orientation.
+
+        Args:
+            joint_name: see `get_object_pose`.
+            delta_world: shape (3,), displacement in the world frame.
+        """
+        pose = self.get_object_pose(joint_name)
+        self.set_object_pose(joint_name, ObjectPose(pose.pos + delta_world, pose.rot))
 
     def render_camera(self, camera_name: str, width: int = 480, height: int = 480) -> np.ndarray:
         """Render an arbitrary named camera (e.g. the twin camera) off-screen.

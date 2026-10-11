@@ -22,6 +22,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from ego2robo.camera import CameraIntrinsics
 from ego2robo.utils.transforms import apply_transform, rvec_tvec_to_transform
+from ego2robo.utils.video import read_frames_with_timestamps
 
 # Landmark indices in MediaPipe's 21-point hand model.
 _WRIST = 0
@@ -62,11 +63,14 @@ class HandFrameResult:
             the camera frame.
         pinch_aperture_m: distance between thumb tip and index tip, in metres
             (computed from the metric world landmarks, so it's camera-pose-independent).
+        reprojection_error_px: mean distance between the 21 detected image landmarks
+            and the PnP-reprojected world landmarks; a per-frame confidence signal.
     """
 
     t_cam_hand: np.ndarray
     tcp_pos_cam: np.ndarray
     pinch_aperture_m: float
+    reprojection_error_px: float = 0.0
 
 
 class HandTcpTracker:
@@ -122,16 +126,37 @@ class HandTcpTracker:
         object_points = np.array([[lm.x, lm.y, lm.z] for lm in world_landmarks], dtype=np.float64)
         image_points = np.array([[lm.x * width, lm.y * height] for lm in image_landmarks], dtype=np.float64)
 
+        # EPnP seeds the pose, then LM refines it. A plain ITERATIVE solve from the
+        # default guess diverges on hands that are small or fingers-spread in the frame
+        # (reprojection error in the thousands of px, z ~ 0), which poisons the trajectory.
         ok, rvec, tvec = cv2.solvePnP(
             object_points,
             image_points,
             self._intrinsics.camera_matrix,
             self._intrinsics.dist_coeffs,
-            flags=cv2.SOLVEPNP_ITERATIVE,
+            flags=cv2.SOLVEPNP_EPNP,
         )
         if not ok:
             return None
+        rvec, tvec = cv2.solvePnPRefineLM(
+            object_points,
+            image_points,
+            self._intrinsics.camera_matrix,
+            self._intrinsics.dist_coeffs,
+            rvec,
+            tvec,
+        )
         t_cam_hand = rvec_tvec_to_transform(rvec, tvec)
+        if (apply_transform(t_cam_hand, object_points)[:, 2] <= 0).any():
+            return None  # a hand with points behind the camera is a flipped solution
+        projected, _ = cv2.projectPoints(
+            object_points,
+            rvec,
+            tvec,
+            self._intrinsics.camera_matrix,
+            self._intrinsics.dist_coeffs,
+        )
+        reprojection_error_px = float(np.linalg.norm(projected.reshape(-1, 2) - image_points, axis=1).mean())
 
         thumb_tip_hand = object_points[_THUMB_TIP]
         index_tip_hand = object_points[_INDEX_TIP]
@@ -140,7 +165,10 @@ class HandTcpTracker:
         pinch_aperture_m = float(np.linalg.norm(thumb_tip_hand - index_tip_hand))
 
         return HandFrameResult(
-            t_cam_hand=t_cam_hand, tcp_pos_cam=tcp_pos_cam, pinch_aperture_m=pinch_aperture_m
+            t_cam_hand=t_cam_hand,
+            tcp_pos_cam=tcp_pos_cam,
+            pinch_aperture_m=pinch_aperture_m,
+            reprojection_error_px=reprojection_error_px,
         )
 
     def close(self) -> None:
@@ -152,3 +180,34 @@ class HandTcpTracker:
 
     def __exit__(self, *_exc_info: object) -> None:
         self.close()
+
+
+@dataclass
+class TrackedFrame:
+    """One video frame with its hand-tracking result, for inspection and plotting.
+
+    Attributes:
+        frame_bgr: the decoded frame.
+        timestamp_s: seconds from the start of the clip.
+        result: tracking result, or None if no hand was detected.
+    """
+
+    frame_bgr: np.ndarray
+    timestamp_s: float
+    result: HandFrameResult | None
+
+
+def track_video(video_path: Path, intrinsics: CameraIntrinsics) -> list[TrackedFrame]:
+    """Run `HandTcpTracker` over every frame of a clip and keep frames with their results.
+
+    Holds all frames in memory; meant for short inspection clips, not full recordings.
+
+    Args:
+        video_path: input clip.
+        intrinsics: calibration of the camera that filmed it.
+    """
+    with HandTcpTracker(intrinsics) as tracker:
+        return [
+            TrackedFrame(frame, t_s, tracker.process_frame(frame, int(round(t_s * 1000))))
+            for frame, t_s in read_frames_with_timestamps(video_path)
+        ]

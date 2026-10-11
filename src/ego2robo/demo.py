@@ -33,6 +33,8 @@ class HumanDemo:
             used by the anchor-correction step (PLAN.md §4 step 4). None until
             `GraspSegmenter` has run.
         release_frame_idx: index of the detected release event. None until segmented.
+        source_start_time_s: time in `source_video` of sample 0 (the first frame with
+            the hand in view), so exporters can fetch the matching frames.
     """
 
     timestamps_s: np.ndarray
@@ -45,6 +47,7 @@ class HumanDemo:
     source_video: Path
     grasp_frame_idx: int | None = field(default=None)
     release_frame_idx: int | None = field(default=None)
+    source_start_time_s: float = 0.0
 
     def save(self, path: Path) -> None:
         """Save this demo to a single .npz file."""
@@ -60,6 +63,7 @@ class HumanDemo:
             source_video=str(self.source_video),
             grasp_frame_idx=-1 if self.grasp_frame_idx is None else self.grasp_frame_idx,
             release_frame_idx=-1 if self.release_frame_idx is None else self.release_frame_idx,
+            source_start_time_s=self.source_start_time_s,
         )
 
     @classmethod
@@ -79,6 +83,8 @@ class HumanDemo:
             source_video=Path(str(data["source_video"])),
             grasp_frame_idx=None if grasp_idx < 0 else grasp_idx,
             release_frame_idx=None if release_idx < 0 else release_idx,
+            # Absent in files written before the field existed.
+            source_start_time_s=float(data["source_start_time_s"]) if "source_start_time_s" in data else 0.0,
         )
 
 
