@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from ego2robo.utils.hand_landmarks import HAND_CONNECTIONS, INDEX_CHAIN, INDEX_TIP, THUMB_CHAIN, THUMB_TIP
+
 if TYPE_CHECKING:
     from ego2robo.camera import CameraIntrinsics
     from ego2robo.hand import TrackedFrame
@@ -228,8 +230,36 @@ def alpha_composite(
     )
 
 
+#: BGR colours shared by the overlay: thumb orange, index green, pinch red.
+THUMB_BGR, INDEX_BGR, PINCH_BGR = (0, 140, 255), (0, 200, 0), (0, 0, 255)
+
+
+def draw_hand_skeleton(frame_bgr: np.ndarray, landmarks_px: np.ndarray) -> None:
+    """Draw the 21 hand landmarks and bones in place, with the pinch fingertips marked.
+
+    Thumb bones are orange and index bones green; the two fingertips get large dots and a
+    red segment joins them, which is the distance reported as the pinch aperture.
+
+    Args:
+        frame_bgr: image to draw on, modified in place.
+        landmarks_px: shape (21, 2) detected landmark pixel coordinates.
+    """
+    points = [(round(u), round(v)) for u, v in landmarks_px]
+    for start, end in HAND_CONNECTIONS:
+        colour = THUMB_BGR if end in THUMB_CHAIN else INDEX_BGR if end in INDEX_CHAIN else (255, 255, 255)
+        cv2.line(frame_bgr, points[start], points[end], colour, 2, cv2.LINE_AA)
+    for point in points:
+        cv2.circle(frame_bgr, point, 3, (30, 30, 30), -1, cv2.LINE_AA)
+    cv2.line(frame_bgr, points[THUMB_TIP], points[INDEX_TIP], PINCH_BGR, 3, cv2.LINE_AA)
+    cv2.circle(frame_bgr, points[THUMB_TIP], 8, THUMB_BGR, -1, cv2.LINE_AA)
+    cv2.circle(frame_bgr, points[INDEX_TIP], 8, INDEX_BGR, -1, cv2.LINE_AA)
+
+
 def draw_tcp_overlay(item: TrackedFrame, intrinsics: CameraIntrinsics) -> np.ndarray:
-    """Copy of a tracked frame with the detected TCP (red cross) and a time/aperture caption.
+    """Copy of a tracked frame with the hand pose, the TCP (red cross) and a time/aperture caption.
+
+    The whole detected hand is drawn when the result carries its landmarks; otherwise only
+    the TCP cross is.
 
     Args:
         item: one `TrackedFrame`; a frame without a hand is captioned "no hand".
@@ -238,12 +268,14 @@ def draw_tcp_overlay(item: TrackedFrame, intrinsics: CameraIntrinsics) -> np.nda
     Returns:
         shape (H, W, 3) BGR frame.
     """
-    red, white = (0, 0, 255), (255, 255, 255)
+    white = (255, 255, 255)
     frame = item.frame_bgr.copy()
     caption = f"t={item.timestamp_s:.1f}s  no hand"
     if item.result is not None:
+        if item.result.landmarks_image_px is not None:
+            draw_hand_skeleton(frame, item.result.landmarks_image_px)
         u, v = intrinsics.project(item.result.tcp_pos_cam)
-        cv2.drawMarker(frame, (round(u), round(v)), red, cv2.MARKER_CROSS, 28, 3)
+        cv2.drawMarker(frame, (round(u), round(v)), PINCH_BGR, cv2.MARKER_CROSS, 28, 3)
         caption = f"t={item.timestamp_s:.1f}s  aperture={item.result.pinch_aperture_m * 100:.1f}cm"
     cv2.putText(frame, caption, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
     cv2.putText(frame, caption, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, white, 2, cv2.LINE_AA)

@@ -10,6 +10,7 @@ import pytest
 
 from ego2robo.camera import CameraIntrinsics
 from ego2robo.hand import HandTcpTracker
+from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
 
 FRAMES_DIR = Path("data/raw/overview_gif/hand_moves_cube")
 
@@ -31,3 +32,8 @@ def test_pnp_depth_is_physical_on_every_detected_frame() -> None:
     assert len(detected) >= 0.8 * len(results)
     assert all(r.tcp_pos_cam[2] > 0.15 for r in detected)
     assert all(r.reprojection_error_px < 30.0 for r in detected)
+    # The recorded landmarks are the PnP inputs: the aperture is the thumb-index distance between them.
+    for r in detected:
+        assert r.landmarks_hand.shape == (21, 3) and r.landmarks_image_px.shape == (21, 2)
+        gap = np.linalg.norm(r.landmarks_hand[THUMB_TIP] - r.landmarks_hand[INDEX_TIP])
+        assert gap == pytest.approx(r.pinch_aperture_m)

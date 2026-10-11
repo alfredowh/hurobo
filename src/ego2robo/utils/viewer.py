@@ -12,6 +12,9 @@ import plotly.graph_objects as go
 from gaussian_renderer import load_ply
 from plotly.subplots import make_subplots
 
+from ego2robo.demo import GraspSegmenter
+from ego2robo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, polyline_with_breaks
+
 if TYPE_CHECKING:
     from ego2robo.hand import TrackedFrame
 
@@ -419,4 +422,191 @@ def tracking_figure(tracked: list[TrackedFrame], title: str = "Hand tracking per
         figure.add_trace(go.Scatter(x=t, y=y, mode="lines+markers", showlegend=False), row=1, col=column)
         figure.update_xaxes(title_text="time (s)", row=1, col=column)
     figure.update_layout(title=title, height=340, margin={"l": 40, "r": 10, "t": 70, "b": 40})
+    return figure
+
+
+def pinch_figure(
+    tracked: list[TrackedFrame],
+    close_threshold_m: float,
+    open_threshold_m: float,
+    title: str = "How the pinch aperture is measured",
+) -> go.Figure:
+    """Step through a tracked clip: the 21-landmark hand, the thumb-index segment, and its length over time.
+
+    Left, the metric hand landmarks in the hand's own frame (the PnP object points). The red
+    segment between the thumb tip (orange) and index tip (green) is the pinch aperture, its
+    midpoint is the TCP. Right, that length per frame against the hysteresis band; the dot is
+    red while `GraspSegmenter` says "grasping" and blue while it says "open".
+
+    Args:
+        tracked: output of `track_video`; frames without a hand show an empty hand and a gap.
+        close_threshold_m: aperture below this closes the grasp state.
+        open_threshold_m: aperture above this opens it.
+        title: figure title.
+
+    Returns:
+        A `go.Figure` with a frame slider and a play button.
+
+    Raises:
+        ValueError: if no frame has recorded landmarks.
+    """
+    with_hand = [i for i, f in enumerate(tracked) if f.result and f.result.landmarks_hand is not None]
+    if not with_hand:
+        raise ValueError("no frame has hand landmarks; track the clip with HandTcpTracker first")
+    t = np.array([f.timestamp_s for f in tracked])
+    aperture_cm = np.array([f.result.pinch_aperture_m * 100 if f.result else np.nan for f in tracked])
+    closed = GraspSegmenter(close_threshold_m, open_threshold_m).segment(aperture_cm / 100)
+    close_cm, open_cm = close_threshold_m * 100, open_threshold_m * 100
+
+    def plot_axes(landmarks_hand: np.ndarray) -> np.ndarray:
+        # MediaPipe's world axes follow the image (x right, y down, z depth); plot (x, z, -y)
+        # so the hand stands upright, in cm.
+        return landmarks_hand[:, [0, 2, 1]] * 100 * np.array([1.0, 1.0, -1.0])
+
+    def frame_traces(i: int) -> list:
+        """The seven traces that change per frame, in figure order (bones ... current dot)."""
+        result = tracked[i].result
+        if result is None or result.landmarks_hand is None:
+            nothing = [None]
+            return [
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter3d(x=nothing, y=nothing, z=nothing),
+                go.Scatter(x=[t[i]], y=[None]),
+            ]
+        hand = plot_axes(result.landmarks_hand)
+        bones = polyline_with_breaks(hand)
+        thumb, index = hand[THUMB_TIP], hand[INDEX_TIP]
+        middle = (thumb + index) / 2
+        return [
+            go.Scatter3d(x=bones[:, 0], y=bones[:, 1], z=bones[:, 2]),
+            go.Scatter3d(x=hand[:, 0], y=hand[:, 1], z=hand[:, 2]),
+            go.Scatter3d(x=[thumb[0]], y=[thumb[1]], z=[thumb[2]]),
+            go.Scatter3d(x=[index[0]], y=[index[1]], z=[index[2]]),
+            go.Scatter3d(x=[thumb[0], index[0]], y=[thumb[1], index[1]], z=[thumb[2], index[2]]),
+            go.Scatter3d(
+                x=[middle[0]],
+                y=[middle[1]],
+                z=[middle[2]],
+                text=[f"aperture {aperture_cm[i]:.1f} cm"],
+                hovertext=[f"TCP (midpoint), aperture {aperture_cm[i]:.2f} cm"],
+            ),
+            go.Scatter(
+                x=[t[i]], y=[aperture_cm[i]], marker={"color": "crimson" if closed[i] else "royalblue"}
+            ),
+        ]
+
+    first = frame_traces(with_hand[0])
+    figure = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{"type": "scene"}, {"type": "xy"}]],
+        column_widths=[0.55, 0.45],
+        horizontal_spacing=0.06,
+    )
+    names = list(LANDMARK_NAMES)
+    static_3d = [
+        {"mode": "lines", "line": {"color": "gray", "width": 4}, "name": "bones", "hoverinfo": "skip"},
+        {
+            "mode": "markers",
+            "marker": {"size": 3, "color": "black"},
+            "name": "21 landmarks",
+            "customdata": names,
+            "hovertemplate": "%{customdata}<extra></extra>",
+        },
+        {"mode": "markers", "marker": {"size": 9, "color": "darkorange"}, "name": "thumb tip (4)"},
+        {"mode": "markers", "marker": {"size": 9, "color": "green"}, "name": "index tip (8)"},
+        {
+            "mode": "lines",
+            "line": {"color": "crimson", "width": 7},
+            "name": "thumb-index segment",
+            "hoverinfo": "skip",
+        },
+        {
+            "mode": "markers+text",
+            "marker": {"size": 6, "color": "black", "symbol": "diamond"},
+            "textposition": "top center",
+            "name": "TCP",
+        },
+    ]
+    for trace, style in zip(first[:6], static_3d, strict=True):
+        trace.update(**style)
+        figure.add_trace(trace, row=1, col=1)
+    # Static curve and hysteresis band, then the moving dot. The band is a filled polygon so
+    # it gets a legend entry and can be toggled.
+    figure.add_trace(
+        go.Scatter(
+            x=[t[0], t[-1], t[-1], t[0], t[0]],
+            y=[close_cm, close_cm, open_cm, open_cm, close_cm],
+            mode="lines",
+            fill="toself",
+            fillcolor="rgba(128,128,128,0.2)",
+            line={"width": 0},
+            name=f"hysteresis ({close_cm:.0f}-{open_cm:.0f} cm)",
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=2,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=t,
+            y=aperture_cm,
+            mode="lines+markers",
+            name="aperture",
+            line={"color": "lightgray"},
+            marker={"size": 4},
+        ),
+        row=1,
+        col=2,
+    )
+    dot = first[6]
+    dot.update(mode="markers", marker={"size": 14, "color": dot.marker.color}, name="now", showlegend=False)
+    figure.add_trace(dot, row=1, col=2)
+    moving = [0, 1, 2, 3, 4, 5, 8]
+
+    figure.frames = [go.Frame(data=frame_traces(i), traces=moving, name=str(i)) for i in range(len(tracked))]
+    all_points = np.vstack([plot_axes(tracked[i].result.landmarks_hand) for i in with_hand])
+    half = float(np.abs(all_points).max()) * 1.1
+    axis = {"range": [-half, half], "backgroundcolor": "rgba(0,0,0,0)"}
+    steps = [
+        {
+            "label": f"{t[i]:.1f}s",
+            "method": "animate",
+            "args": [[str(i)], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}}],
+        }
+        for i in range(len(tracked))
+    ]
+    figure.update_layout(
+        title=title,
+        height=520,
+        margin={"l": 10, "r": 10, "t": 50, "b": 10},
+        scene={
+            "xaxis": {**axis, "title": "x right (cm)"},
+            "yaxis": {**axis, "title": "z depth (cm)"},
+            "zaxis": {**axis, "title": "up = -y (cm)"},
+            "aspectmode": "cube",
+        },
+        xaxis2={"title": "time (s)"},
+        yaxis2={"title": "aperture (cm)"},
+        sliders=[{"active": with_hand[0], "steps": steps, "currentvalue": {"prefix": "t = "}}],
+        updatemenus=[
+            {
+                "type": "buttons",
+                "showactive": False,
+                "x": 0.0,
+                "y": -0.05,
+                "buttons": [
+                    {
+                        "label": "play",
+                        "method": "animate",
+                        "args": [None, {"frame": {"duration": 200, "redraw": True}, "fromcurrent": True}],
+                    }
+                ],
+            }
+        ],
+    )
     return figure

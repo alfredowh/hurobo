@@ -21,13 +21,9 @@ from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision as mp_vision
 
 from ego2robo.camera import CameraIntrinsics
+from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP
 from ego2robo.utils.transforms import apply_transform, rvec_tvec_to_transform
 from ego2robo.utils.video import read_frames_with_timestamps
-
-# Landmark indices in MediaPipe's 21-point hand model.
-_WRIST = 0
-_THUMB_TIP = 4
-_INDEX_TIP = 8
 
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -65,12 +61,25 @@ class HandFrameResult:
             (computed from the metric world landmarks, so it's camera-pose-independent).
         reprojection_error_px: mean distance between the 21 detected image landmarks
             and the PnP-reprojected world landmarks; a per-frame confidence signal.
+        landmarks_hand: shape (21, 3), the metric world landmarks in the hand's local frame
+            (the PnP object points); the pinch aperture is measured between rows 4 and 8.
+        landmarks_image_px: shape (21, 2), the detected landmarks in the image (the PnP
+            image points).
     """
 
     t_cam_hand: np.ndarray
     tcp_pos_cam: np.ndarray
     pinch_aperture_m: float
     reprojection_error_px: float = 0.0
+    landmarks_hand: np.ndarray | None = None
+    landmarks_image_px: np.ndarray | None = None
+
+    @property
+    def landmarks_cam(self) -> np.ndarray | None:
+        """shape (21, 3), the landmarks in the camera frame, or None if not recorded."""
+        if self.landmarks_hand is None:
+            return None
+        return apply_transform(self.t_cam_hand, self.landmarks_hand)
 
 
 class HandTcpTracker:
@@ -158,8 +167,8 @@ class HandTcpTracker:
         )
         reprojection_error_px = float(np.linalg.norm(projected.reshape(-1, 2) - image_points, axis=1).mean())
 
-        thumb_tip_hand = object_points[_THUMB_TIP]
-        index_tip_hand = object_points[_INDEX_TIP]
+        thumb_tip_hand = object_points[THUMB_TIP]
+        index_tip_hand = object_points[INDEX_TIP]
         tcp_pos_hand = (thumb_tip_hand + index_tip_hand) / 2.0
         tcp_pos_cam = apply_transform(t_cam_hand, tcp_pos_hand)
         pinch_aperture_m = float(np.linalg.norm(thumb_tip_hand - index_tip_hand))
@@ -169,6 +178,8 @@ class HandTcpTracker:
             tcp_pos_cam=tcp_pos_cam,
             pinch_aperture_m=pinch_aperture_m,
             reprojection_error_px=reprojection_error_px,
+            landmarks_hand=object_points,
+            landmarks_image_px=image_points,
         )
 
     def close(self) -> None:

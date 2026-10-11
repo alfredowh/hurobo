@@ -12,6 +12,8 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from ego2robo.demo import GraspSegmenter
+from ego2robo.utils.hand_landmarks import INDEX_TIP, THUMB_TIP, polyline_with_breaks
 from ego2robo.utils.video import VideoWriter, draw_tcp_overlay
 
 if TYPE_CHECKING:
@@ -19,6 +21,7 @@ if TYPE_CHECKING:
     from ego2robo.hand import TrackedFrame
 
 _BLUE, _RED, _GREY = "royalblue", "crimson", "0.7"
+_THUMB, _INDEX = "darkorange", "green"  # same hues as the image overlay
 _SERIES_COLOURS = ("tab:blue", "tab:orange", "tab:green", "tab:purple")
 
 
@@ -66,6 +69,7 @@ class SyncedDashboard:
         close_threshold_m: float | None = None,
         open_threshold_m: float | None = None,
         signal_panels: Sequence[SignalPanel] = (),
+        hand_landmarks_xyz: np.ndarray | None = None,
         size_px: tuple[int, int] = (1280, 720),
     ) -> None:
         """Build the figure from a whole clip or episode.
@@ -84,6 +88,9 @@ class SyncedDashboard:
             open_threshold_m: upper edge of the grasp hysteresis band.
             signal_panels: extra time series (e.g. observation.state, action) drawn after the
                 aperture panel, each with a cursor synced to the same clock.
+            hand_landmarks_xyz: shape (N, 21, 3) hand landmarks in the same axes as `path_xyz`
+                (NaN = no hand); the 3D panel then draws the whole hand pose, with the pinch
+                fingertips and the segment between them.
             size_px: (width, height) of the output frames; keep both even for H.264.
 
         Raises:
@@ -98,6 +105,9 @@ class SyncedDashboard:
         self._t_s = np.asarray(timestamps_s, dtype=float)
         self._path = np.asarray(path_xyz, dtype=float)
         self._aperture_cm = np.asarray(aperture_m, dtype=float) * 100
+        self._hand = None if hand_landmarks_xyz is None else np.asarray(hand_landmarks_xyz, dtype=float)
+        if self._hand is not None and self._hand.shape != (count, 21, 3):
+            raise ValueError(f"hand_landmarks_xyz must have shape ({count}, 21, 3), got {self._hand.shape}")
         self._grasp_path = (
             None
             if grasp_mask is None
@@ -107,20 +117,25 @@ class SyncedDashboard:
         dpi = 100
         self._figure = Figure(figsize=(size_px[0] / dpi, size_px[1] / dpi), dpi=dpi)
         self._canvas = FigureCanvasAgg(self._figure)
-        num_bottom = 1 + len(signal_panels)
-        grid = self._figure.add_gridspec(2, 2 * num_bottom, height_ratios=[1.5, 1], hspace=0.45, wspace=0.9)
-        self._build_image_panel(self._figure.add_subplot(grid[0, :num_bottom]), image_title)
+        # Two grids so the top row (image, 3D) is not forced onto the bottom row's column gaps.
+        margins = {"left": 0.05, "right": 0.94}
+        top_grid = self._figure.add_gridspec(
+            1, 2, top=0.94, bottom=0.46, wspace=0.05, width_ratios=[1.2, 1], **margins
+        )
+        bottom_grid = self._figure.add_gridspec(
+            1, 1 + len(signal_panels), top=0.34, bottom=0.1, wspace=0.4, **margins
+        )
+        self._build_image_panel(self._figure.add_subplot(top_grid[0, 0]), image_title)
         self._build_path_panel(
-            self._figure.add_subplot(grid[0, num_bottom:], projection="3d"), path_title, path_axis_labels
+            self._figure.add_subplot(top_grid[0, 1], projection="3d"), path_title, path_axis_labels
         )
         self._cursors: list = []
         self._dots: list[tuple] = []  # (line, series values) pairs that follow the cursor
         self._build_aperture_panel(
-            self._figure.add_subplot(grid[1, 0:2]), grasp_mask, close_threshold_m, open_threshold_m
+            self._figure.add_subplot(bottom_grid[0, 0]), grasp_mask, close_threshold_m, open_threshold_m
         )
         for k, panel in enumerate(signal_panels, start=1):
-            self._build_signal_panel(self._figure.add_subplot(grid[1, 2 * k : 2 * k + 2]), panel)
-        self._figure.subplots_adjust(left=0.05, right=0.94, top=0.93, bottom=0.1)
+            self._build_signal_panel(self._figure.add_subplot(bottom_grid[0, k]), panel)
 
     def _build_image_panel(self, axes, title: str) -> None:
         axes.set_title(title)
@@ -133,7 +148,15 @@ class SyncedDashboard:
         (self._trail,) = axes.plot([], [], [], color=_BLUE, lw=2.5)
         (self._grasp_trail,) = axes.plot([], [], [], color=_RED, lw=4)
         (self._head,) = axes.plot([], [], [], "o", color="black", ms=8)
-        valid = self._path[~np.isnan(self._path).any(axis=1)]
+        if self._hand is not None:
+            (self._skeleton,) = axes.plot([], [], [], color="0.25", lw=1.2)
+            (self._pinch_line,) = axes.plot([], [], [], color=_RED, lw=3)
+            (self._thumb_tip,) = axes.plot([], [], [], "o", color=_THUMB, ms=7)
+            (self._index_tip,) = axes.plot([], [], [], "o", color=_INDEX, ms=7)
+        extent_points = (
+            self._path if self._hand is None else np.vstack([self._path, self._hand.reshape(-1, 3)])
+        )
+        valid = extent_points[~np.isnan(extent_points).any(axis=1)]
         low, high = valid.min(axis=0), valid.max(axis=0)
         pad = np.maximum(high - low, 0.02) * 0.1
         axes.set_xlim(low[0] - pad[0], high[0] + pad[0])
@@ -220,6 +243,12 @@ class SyncedDashboard:
         self._head.set_data_3d(*so_far[-1:].T)
         if self._grasp_path is not None:
             self._grasp_trail.set_data_3d(*self._grasp_path[: index + 1].T)
+        if self._hand is not None:
+            hand = self._hand[index]
+            self._skeleton.set_data_3d(*polyline_with_breaks(hand).T)
+            self._pinch_line.set_data_3d(*hand[[THUMB_TIP, INDEX_TIP]].T)
+            self._thumb_tip.set_data_3d(*hand[THUMB_TIP : THUMB_TIP + 1].T)
+            self._index_tip.set_data_3d(*hand[INDEX_TIP : INDEX_TIP + 1].T)
         self._aperture_so_far.set_data(self._t_s[: index + 1], self._aperture_cm[: index + 1])
         for cursor in self._cursors:
             cursor.set_xdata([self._t_s[index]] * 2)
@@ -253,7 +282,11 @@ def tracking_dashboard(
     close_threshold_m: float | None = None,
     open_threshold_m: float | None = None,
 ) -> SyncedDashboard:
-    """Dashboard of a raw tracked clip: TCP overlay | path in the camera frame | aperture.
+    """Dashboard of a raw tracked clip: hand overlay | hand pose + TCP path in 3D | aperture.
+
+    When both thresholds are given the raw aperture is run through `GraspSegmenter`, so the
+    grasping state the video shows is exactly the hysteresis logic of the extraction pipeline
+    (minus the resampling and smoothing `DemoExtractor` adds).
 
     Args:
         tracked: output of `track_video`; frames without a hand are gaps in the curves.
@@ -261,17 +294,34 @@ def tracking_dashboard(
         close_threshold_m: lower edge of the grasp hysteresis band to draw, if any.
         open_threshold_m: upper edge of the grasp hysteresis band to draw, if any.
     """
-    tcp_cam = np.array([f.result.tcp_pos_cam if f.result else [np.nan] * 3 for f in tracked])
-    # Plot as (x, z, -y): depth runs along the ground plane and up is up, whereas the
-    # camera frame has y pointing down.
-    path = np.column_stack([tcp_cam[:, 0], tcp_cam[:, 2], -tcp_cam[:, 1]])
+
+    def to_plot_axes(points_cam: np.ndarray) -> np.ndarray:
+        # Plot as (x, z, -y): depth runs along the ground plane and up is up, whereas the
+        # camera frame has y pointing down.
+        return points_cam[..., [0, 2, 1]] * np.array([1.0, 1.0, -1.0])
+
+    nan_point = np.full(3, np.nan)
+    tcp_cam = np.array([f.result.tcp_pos_cam if f.result else nan_point for f in tracked])
+    aperture_m = np.array([f.result.pinch_aperture_m if f.result else np.nan for f in tracked])
+    landmarks = [f.result.landmarks_cam if f.result else None for f in tracked]
+    hand_cam = None
+    if any(lm is not None for lm in landmarks):
+        hand_cam = to_plot_axes(
+            np.array([lm if lm is not None else np.full((21, 3), np.nan) for lm in landmarks])
+        )
+    grasp_mask = None
+    if close_threshold_m is not None and open_threshold_m is not None:
+        # NaN apertures compare False both ways, so a missing hand keeps the previous state.
+        grasp_mask = GraspSegmenter(close_threshold_m, open_threshold_m).segment(aperture_m)
     return SyncedDashboard(
         [draw_tcp_overlay(f, intrinsics) for f in tracked],
         np.array([f.timestamp_s for f in tracked]),
-        path,
-        np.array([f.result.pinch_aperture_m if f.result else np.nan for f in tracked]),
-        image_title="camera view + detected TCP",
-        path_title="TCP path, camera frame (m)",
+        to_plot_axes(tcp_cam),
+        aperture_m,
+        hand_landmarks_xyz=hand_cam,
+        grasp_mask=grasp_mask,
+        image_title="detected hand, pinch fingertips and TCP",
+        path_title="hand pose + TCP path, camera frame (m)",
         path_axis_labels=("x right", "z depth", "up (-y)"),
         close_threshold_m=close_threshold_m,
         open_threshold_m=open_threshold_m,
