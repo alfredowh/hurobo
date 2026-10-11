@@ -298,6 +298,36 @@ def crop_ply(ply_in: Path, ply_out: Path, cylinders: list[CropCylinder], keep_in
     return len(kept)
 
 
+def split_tabletop_background(
+    table_ply: Path,
+    background_ply: Path,
+    radius_m: float,
+    centre_xy: tuple[float, float] = (0.0, 0.0),
+    z_min_m: float = -0.02,
+    z_max_m: float = 0.6,
+) -> tuple[int, int]:
+    """Split a metric table-frame splat into tabletop (in place) and background (written aside).
+
+    The tabletop is a vertical cylinder over the table; everything outside it (walls,
+    floor, clutter beyond the table edge, and anything above `z_max_m`) is background.
+
+    Args:
+        table_ply: splat in the z-up table frame; rewritten to hold only the tabletop.
+        background_ply: where the remaining Gaussians are written.
+        radius_m: cylinder radius, in metres, around `centre_xy`.
+        centre_xy: table-frame (x, y) of the table centre, in metres.
+        z_min_m: cylinder bottom; just under the table surface, so legs and floor go to background.
+        z_max_m: cylinder top, above the tallest object.
+
+    Returns:
+        (tabletop_count, background_count) Gaussians.
+    """
+    cylinder = CropCylinder(radius_m, z_min_m, z_max_m, np.array(centre_xy, dtype=float))
+    background = crop_ply(table_ply, background_ply, [cylinder], keep_inside=False)
+    tabletop = crop_ply(table_ply, table_ply, [cylinder], keep_inside=True)
+    return tabletop, background
+
+
 def border_colour(images_rgb: list[np.ndarray], border_px: int = 8) -> tuple[float, float, float]:
     """Median RGB of the image borders: the backdrop colour of a turntable/orbit clip."""
     strips = []

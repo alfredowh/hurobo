@@ -7,11 +7,14 @@ Two modes:
 - --charuco: the real table with the ChArUco board lying on it (REAL2SIM_IDEAS.md
   §7 capture). Metric, in the board's z-up table frame. Each `--object NAME X Y R H`
   (metres, table frame) is cut out to `<name>_<NAME>.ply` and removed from
-  `<name>_table.ply`. Attach objects with METRIC_BOTTOM, the table with METRIC_TOP.
+  `<name>_table.ply`. With `--table-radius` the table splat is split into a
+  tabletop cylinder (`<name>_table.ply`) and `<name>_background.ply`.
+  Attach objects with METRIC_BOTTOM, the table with METRIC_TOP.
 
     uv run python scripts/09_scan_object.py data/raw/dummy_orbits/<clip>.mp4 --name dummy_fruit_bowl
     uv run python scripts/09_scan_object.py data/raw/s24_orbit.mp4 --name real --charuco \\
-        --object bowl 0.10 0.05 0.09 0.08 --object plate -0.05 0.12 0.12 0.04
+        --object bowl 0.10 0.05 0.09 0.08 --object plate -0.05 0.12 0.12 0.04 \\
+        --table-radius 0.5 --table-centre 0.2 0.1
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from hurobo.scan import (
     border_colour,
     crop_ply,
     object_frame_from_orbit,
+    split_tabletop_background,
     transform_ply,
 )
 
@@ -58,7 +62,13 @@ def scan_single_object(sfm: SfmResult, trainer: SplatTrainer, out_ply: Path) -> 
 
 
 def scan_charuco_table(
-    sfm: SfmResult, trainer: SplatTrainer, out_dir: Path, name: str, objects: list[list[str]]
+    sfm: SfmResult,
+    trainer: SplatTrainer,
+    out_dir: Path,
+    name: str,
+    objects: list[list[str]],
+    table_radius_m: float | None = None,
+    table_centre_xy: tuple[float, float] = (0.0, 0.0),
 ) -> TrainResult:
     """ChArUco mode: train in the SfM frame, align to the metric table frame, split objects from the table."""
     similarity, rms_m = ChArUcoAligner(ChArUcoCalibrator().board).align(sfm)
@@ -77,6 +87,12 @@ def scan_charuco_table(
     if cylinders:
         kept = crop_ply(table_ply, table_ply, cylinders, keep_inside=False)
         print(f"[scan] table without objects: {kept} Gaussians -> {table_ply}")
+    if table_radius_m is not None:
+        background_ply = out_dir / f"{name}_background.ply"
+        tabletop, background = split_tabletop_background(
+            table_ply, background_ply, table_radius_m, table_centre_xy
+        )
+        print(f"[scan] tabletop {tabletop} -> {table_ply}; background {background} -> {background_ply}")
     return result
 
 
@@ -98,6 +114,20 @@ def main() -> None:
         metavar=("NAME", "X", "Y", "RADIUS", "HEIGHT"),
         help="--charuco only: object cylinder to cut out, metres in the table frame",
     )
+    parser.add_argument(
+        "--table-radius",
+        type=float,
+        default=None,
+        help="--charuco only: tabletop radius in metres; the rest goes to <name>_background.ply",
+    )
+    parser.add_argument(
+        "--table-centre",
+        nargs=2,
+        type=float,
+        default=(0.0, 0.0),
+        metavar=("X", "Y"),
+        help="--charuco only: table centre (x y) in the board's table frame, metres",
+    )
     parser.add_argument("--work-dir", type=Path, default=Path("data/scans"))
     parser.add_argument("--out-dir", type=Path, default=Path("data/splats"))
     args = parser.parse_args()
@@ -111,7 +141,9 @@ def main() -> None:
 
     if args.charuco:
         trainer = SplatTrainer(iterations=args.iterations, background_rgb=(0.0, 0.0, 0.0))
-        result = scan_charuco_table(sfm, trainer, args.out_dir, args.name, args.object)
+        result = scan_charuco_table(
+            sfm, trainer, args.out_dir, args.name, args.object, args.table_radius, tuple(args.table_centre)
+        )
     else:
         trainer = SplatTrainer(
             iterations=args.iterations, background_rgb=border_colour([im.image_rgb for im in sfm.images])
