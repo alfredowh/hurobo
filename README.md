@@ -97,7 +97,7 @@ Select ready LIBERO objects (bowl, plate). Find real objects with the same size.
 |---|---|---|
 | Baseline | **Motion-only retargeting with size-matched objects (Solution 4).** The video is a motion-capture device. Only a few object-relative numbers cross from real to sim: approach direction, grasp height, lift, carry path, place offset, release timing. SmolVLA does not see a real pixel. | core path |
 | Main visual | **SceneTwin:** copy the real object layout and camera pose into the simulator. Replay. Render from the same viewpoint next to the real clip. | built, checked on stand-in data |
-| Stretch | **Solutions 2 and 3 with Gaussian splats:** attach scanned objects (and scene) to the LIBERO bodies. Composite with the mesh robot by depth. | pipeline built, checked on stand-in scans, time-gated |
+| Stretch | **Solutions 2 and 3 with Gaussian splats:** attach scanned objects (and scene) to the LIBERO bodies. Composite with the mesh robot by depth. | pipeline built, checked on stand-in scans and one real bowl clip (SfM needed a lowered SIFT threshold, see the [design log](docs/design_decisions.md)), time-gated |
 
 The baseline avoids the visual domain gap. It does not close the gap. Splat-based real2sim reduces the visual gap for illustration. A real-robot validation is outside this challenge.
 
@@ -183,11 +183,11 @@ hurobo/
 │   ├── twin.py, sim.py               # SceneTwin, LIBERO wrapper
 │   ├── control.py                    # waypoints → clipped 7-D delta actions
 │   ├── teleop.py, teleop_app.py, live.py, props.py   # hand/keyboard teleop of the Panda, live window, grasp cube
-│   ├── scan.py, splat.py, collider.py                # orbit video → splat → composite → collision mesh
+│   ├── scan.py, scan_sweep.py, splat.py, collider.py # orbit video → splat → composite → collision mesh; scan parameter sweep
 │   └── utils/                        # transforms, signal, video, plotting, viewer, synthetic, notebook
 ├── scripts/                          # thin CLIs: NN_name.py
 ├── examples/                         # one notebook for each capability (section 8)
-├── docs/                             # scanning_guide.md, camera_sources.md
+├── docs/                             # scanning_guide.md, camera_sources.md, design_decisions.md
 ├── tests/                            # pytest
 └── data/                             # not in git: raw clips, intrinsics, scans, splats, datasets
 ```
@@ -224,7 +224,7 @@ Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started
 | Training | `05_train.sh`. ACT fallback (about 1 h), then SmolVLA fine-tune. | ⬜ |
 | Evaluation | `06_eval.sh`. N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. | ⬜ |
 | Figures | GIFs, 3D trajectory plot (human TCP and robot EEF), data-multiplier curve, one failure case | ⬜ |
-| Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built, real scan not done |
+| Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. One real bowl clip reconstructs only with a lowered SIFT threshold, which is not the script default yet ([D-001](docs/design_decisions.md)). No table or plate scan, no composite yet. |
 | Stretch | Second camera view for stereo, only if monocular depth fails | ⬜ |
 | Stretch | In-context or few-step adaptation ([ICL_IDEAS.md](ICL_IDEAS.md)) | ⬜ |
 | Submission | Fresh-clone test, results table, honest "what did not work", public repository | ⬜ |
@@ -246,8 +246,9 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 | [05_hand_tracking](examples/05_hand_tracking.ipynb) | MediaPipe + PnP hand TCP, pinch-aperture step-through, ArUco poses against ground truth, `DemoExtractor` QC report. |
 | [06_lerobot_recording](examples/06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload: schema, video, state and action, sidecar file. |
 | [07_teleop](examples/07_teleop.ipynb) | Hand-clip teleoperation of the LIBERO Panda: table-to-world mapping, tracking error, cube spawned on grasp, scripted keyboard control. |
+| [08_scan_parameter_sweep](examples/08_scan_parameter_sweep.ipynb) | How SfM settings, matching mode, keyframe spacing and training length change a real phone scan: registration, orbit coverage, held-out PSNR, held-out photo vs splat. Real clip, not committed. |
 
-Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet. Each notebook states this in its introduction.
+Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebook 08 is the exception and reads results from a real phone clip of a bowl. Each notebook states this in its introduction.
 
 ```bash
 uv run jupyter lab examples/
