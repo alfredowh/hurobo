@@ -11,10 +11,11 @@ One notebook per capability of this workspace. Each is self-contained, runs top 
 | [05_hand_tracking](05_hand_tracking.ipynb) | MediaPipe + PnP hand TCP (interactive per-frame curves, overlay video, whole-hand overlay, interactive pinch-aperture step-through, synced overlay + 3D hand + aperture video), ArUco table/bowl/plate poses vs ground truth, `DemoExtractor` QC report | `data/raw/overview_gif/first_clip/` (stand-in clip) |
 | [06_lerobot_recording](06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload (schema, video, state/action, state-vs-action overlay, sidecar, synced episode video) | same stand-in clip |
 | [07_teleop](07_teleop.ipynb) | Hand-clip teleoperation of the LIBERO Panda: table-frame hand path under two camera poses, table-to-world mapping, tracking error, cube spawned on grasp, 1x and slowed-down videos, scripted keyboard driving | GPU/EGL, `data/raw/overview_gif/hand_moves_cube/` (stand-in clip; markers are synthetic) |
+| [08_scan_parameter_sweep](08_scan_parameter_sweep.ipynb) | How COLMAP/SIFT settings, matching mode, keyframe spacing and training length change a phone scan: registration, orbit coverage, held-out PSNR, recovered cameras, held-out photo vs splat | `data/scans/sweeps/bowl_1angle/` (from `scripts/14_scan_param_sweep.py`; real phone clip, not committed) |
 
 Camera sources for live teleoperation (webcam, phone, streams) are documented in [`docs/camera_sources.md`](../docs/camera_sources.md).
 
-The `data/` inputs are produced by `scripts/08_splat_composite.py` and `scripts/09_scan_object.py` (they are not committed).
+The `data/` inputs are produced by `scripts/08_splat_composite.py`, `scripts/09_scan_object.py` and `scripts/14_scan_param_sweep.py` (they are not committed).
 
 ## Running
 
