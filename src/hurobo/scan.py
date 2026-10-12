@@ -11,11 +11,13 @@ import math
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.spatial import cKDTree
 
 from hurobo.utils.video import read_frames
 
@@ -118,12 +120,98 @@ class SfmResult:
         return SfmResult(images=images, points_world=points, colors=self.colors)
 
 
+@dataclass(frozen=True)
+class SfmOptions:
+    """COLMAP settings that decide whether a low-texture clip reconstructs; the defaults are COLMAP's own.
+
+    Attributes:
+        peak_threshold: SIFT contrast threshold. None keeps COLMAP's 0.0067; lower finds more
+            features on low-contrast surfaces (wood grain, plain walls).
+        max_ratio: Lowe ratio-test threshold when matching. None keeps COLMAP's 0.8; higher keeps
+            more, noisier, matches.
+        matching: "sequential" matches each frame with its `overlap` neighbours (plus loop
+            closure); "exhaustive" matches every pair, O(N^2) but robust when neighbour links
+            are weak.
+        overlap: neighbours per frame for sequential matching.
+        init_min_tri_angle_deg: minimum triangulation angle to seed the model. None keeps
+            COLMAP's 16; a near-planar scene (a bowl on a floor) rarely reaches it.
+    """
+
+    peak_threshold: float | None = None
+    max_ratio: float | None = None
+    matching: Literal["sequential", "exhaustive"] = "sequential"
+    overlap: int = 15
+    init_min_tri_angle_deg: float | None = None
+
+
+@dataclass
+class SfmSummary:
+    """How much of a keyframe set one SfM run registered.
+
+    Attributes:
+        num_images: keyframes given to COLMAP.
+        num_registered: images in the largest model.
+        num_models: separate models COLMAP produced (1 means one connected reconstruction).
+        num_points: sparse points of the largest model.
+        mean_reprojection_px: mean reprojection error of the largest model.
+    """
+
+    num_images: int
+    num_registered: int
+    num_models: int
+    num_points: int
+    mean_reprojection_px: float
+
+    @property
+    def registered_fraction(self) -> float:
+        """Share of the keyframes that ended up in the largest model."""
+        return self.num_registered / max(self.num_images, 1)
+
+
+def colmap_extraction_options(options: SfmOptions):
+    """pycolmap feature-extraction options with `options` applied over COLMAP's defaults."""
+    import pycolmap
+
+    extraction = pycolmap.FeatureExtractionOptions()
+    if options.peak_threshold is not None:
+        extraction.sift.peak_threshold = options.peak_threshold
+    return extraction
+
+
+def colmap_matching_options(options: SfmOptions):
+    """pycolmap feature-matching options with `options` applied over COLMAP's defaults."""
+    import pycolmap
+
+    matching = pycolmap.FeatureMatchingOptions()
+    if options.max_ratio is not None:
+        matching.sift.max_ratio = options.max_ratio
+    return matching
+
+
+def colmap_pipeline_options(options: SfmOptions):
+    """pycolmap incremental-mapping options with `options` applied over COLMAP's defaults."""
+    import pycolmap
+
+    pipeline = pycolmap.IncrementalPipelineOptions()
+    if options.init_min_tri_angle_deg is not None:
+        pipeline.mapper.init_min_tri_angle = options.init_min_tri_angle_deg
+    return pipeline
+
+
 class SfmReconstructor:
-    """Runs pycolmap SIFT + sequential matching + incremental mapping on a keyframe folder.
+    """Runs pycolmap SIFT + pair matching + incremental mapping on a keyframe folder.
 
     PINHOLE with one shared camera: a phone's main lens with stabilisation off is
     close enough to distortion-free that the splat trainer can then use plain K.
+
+    Attributes:
+        last_summary: registration statistics of the most recent `run`, or None before the first.
     """
+
+    def __init__(self, options: SfmOptions | None = None) -> None:
+        """Set the COLMAP options; None means COLMAP's defaults with sequential matching."""
+        self._options = options or SfmOptions()
+        self.last_summary: SfmSummary | None = None
 
     def run(self, image_dir: Path, work_dir: Path) -> SfmResult:
         """Reconstruct, keep the largest model, and load its registered images.
@@ -147,18 +235,36 @@ class SfmReconstructor:
         reader = pycolmap.ImageReaderOptions()
         reader.camera_model = "PINHOLE"
         pycolmap.extract_features(
-            database, image_dir, camera_mode=pycolmap.CameraMode.SINGLE, reader_options=reader
+            database,
+            image_dir,
+            camera_mode=pycolmap.CameraMode.SINGLE,
+            reader_options=reader,
+            extraction_options=colmap_extraction_options(self._options),
         )
-        pairing = pycolmap.SequentialPairingOptions()
-        pairing.overlap = 15
-        # A turntable or orbit comes back to its start; loop closure needs these pairs too.
-        pairing.quadratic_overlap = True
-        pycolmap.match_sequential(database, pairing_options=pairing)
-        models = pycolmap.incremental_mapping(database, image_dir, work_dir / "sparse")
+        matching = colmap_matching_options(self._options)
+        if self._options.matching == "exhaustive":
+            pycolmap.match_exhaustive(database, matching_options=matching)
+        else:
+            pairing = pycolmap.SequentialPairingOptions()
+            pairing.overlap = self._options.overlap
+            # A turntable or orbit comes back to its start; loop closure needs these pairs too.
+            pairing.quadratic_overlap = True
+            pycolmap.match_sequential(database, matching_options=matching, pairing_options=pairing)
+        models = pycolmap.incremental_mapping(
+            database, image_dir, work_dir / "sparse", colmap_pipeline_options(self._options)
+        )
         if not models:
             raise RuntimeError("SfM registered no images; orbit too fast, too blurry or too textureless")
         model = largest_model(list(models.values()))
-        print(f"[SfM] registered {model.num_reg_images()}/{len(list(image_dir.glob('*.png')))} images")
+        num_images = len(list(image_dir.glob("*.png")))
+        self.last_summary = SfmSummary(
+            num_images=num_images,
+            num_registered=model.num_reg_images(),
+            num_models=len(models),
+            num_points=model.num_points3D(),
+            mean_reprojection_px=float(model.compute_mean_reprojection_error()),
+        )
+        print(f"[SfM] registered {model.num_reg_images()}/{num_images} images in {len(models)} model(s)")
         return sfm_result_from_model(model, image_dir)
 
 
@@ -237,6 +343,30 @@ def object_frame_from_orbit(sfm: SfmResult) -> np.ndarray:
     t_obj_world[:3, :3] = rot_obj_world
     t_obj_world[:3, 3] = -origin_obj
     return t_obj_world
+
+
+def orbit_coverage_deg(sfm: SfmResult) -> float:
+    """Degrees of the orbit around the object that the registered cameras actually cover.
+
+    Cameras are placed by their azimuth around the sparse points' centre in the orbit frame;
+    the coverage is 360 minus the largest empty gap, so a closed loop reads close to 360 and a
+    fragment of an arc reads as roughly its length. Independent of the order the cameras are
+    listed in. A full loop is reliable; for fragments the centre is poorly determined and the
+    value moves by tens of degrees with the centre estimate, so treat it as approximate.
+
+    Args:
+        sfm: the reconstruction (poses and points are enough; pixels are not used).
+
+    Returns:
+        Coverage in degrees, in [0, 360].
+    """
+    t_obj_world = object_frame_from_orbit(sfm)
+    centres = sfm.camera_centres_world @ t_obj_world[:3, :3].T + t_obj_world[:3, 3]
+    points = sfm.points_world @ t_obj_world[:3, :3].T + t_obj_world[:3, 3]
+    centre_xy = np.median(points[:, :2], axis=0)
+    azimuth = np.sort(np.arctan2(centres[:, 1] - centre_xy[1], centres[:, 0] - centre_xy[0]))
+    gaps = np.diff(np.concatenate([azimuth, [azimuth[0] + 2 * np.pi]]))
+    return float(np.degrees(2 * np.pi - gaps.max()))
 
 
 @dataclass
@@ -493,6 +623,26 @@ def _ssim(img1: torch.Tensor, img2: torch.Tensor, window: int = 11) -> torch.Ten
     return ssim_map.mean()
 
 
+def holdout_split(num_views: int, holdout_every: int | None) -> tuple[list[int], list[int]]:
+    """Split view indices into (train, held-out): every `holdout_every`-th view is withheld.
+
+    Args:
+        num_views: number of posed keyframes, in time order.
+        holdout_every: withhold views 0, N, 2N, ...; None or 0 withholds nothing.
+
+    Returns:
+        (train_ids, heldout_ids), both ascending.
+    """
+    heldout = set(range(0, num_views, holdout_every)) if holdout_every else set()
+    return [i for i in range(num_views) if i not in heldout], sorted(heldout)
+
+
+def preview_grid(pairs: list[tuple[np.ndarray, np.ndarray]]) -> np.ndarray:
+    """Stack (render, photo) float RGB pairs into one uint8 image, one `photo | render` row per pair."""
+    rows = [np.concatenate([photo, render], axis=1) for render, photo in pairs]
+    return (np.concatenate(rows, axis=0) * 255).astype(np.uint8)
+
+
 @dataclass
 class TrainResult:
     """Outcome of one splat fit.
@@ -501,11 +651,16 @@ class TrainResult:
         mean_psnr_db: mean PSNR over all training views after the last step.
         num_gaussians: Gaussians in the exported splat.
         previews: (render, photo) RGB float pairs for a few spread-out training views.
+        heldout_psnr_db: mean PSNR over the views withheld from training, or None when none were.
+            This is the honest number: the model never saw these images.
+        heldout_previews: (render, photo) pairs for a few of the withheld views.
     """
 
     mean_psnr_db: float
     num_gaussians: int
     previews: list[tuple[np.ndarray, np.ndarray]]
+    heldout_psnr_db: float | None = None
+    heldout_previews: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
 
 
 class SplatTrainer:
@@ -540,7 +695,13 @@ class SplatTrainer:
         self._background = torch.tensor(background_rgb, device=device)[None]
         self._device = device
 
-    def train(self, sfm: SfmResult, t_obj_world: np.ndarray, out_ply: Path) -> TrainResult:
+    def train(
+        self,
+        sfm: SfmResult,
+        t_obj_world: np.ndarray,
+        out_ply: Path,
+        holdout_every: int | None = None,
+    ) -> TrainResult:
         """Fit Gaussians to the posed images, in the object frame, and export a 3DGS .ply.
 
         Args:
@@ -548,9 +709,12 @@ class SplatTrainer:
             t_obj_world: SfM frame -> object frame; training happens directly in
                 the object frame so the exported splat needs no re-posing.
             out_ply: where to write the trained splat.
+            holdout_every: withhold every N-th keyframe from training and score the splat on
+                those instead (`TrainResult.heldout_psnr_db`); None trains on all views.
 
         Returns:
-            Fit quality and preview pairs (training views, so an optimistic check).
+            Fit quality and preview pairs; PSNR over the training views is optimistic, the
+            held-out PSNR (when requested) is not.
         """
         from gsplat import export_splats
         from gsplat.rendering import rasterization
@@ -567,7 +731,8 @@ class SplatTrainer:
         targets = [torch.from_numpy(im.image_rgb).to(dev) for im in sfm.images]
         height, width = sfm.images[0].image_rgb.shape[:2]
 
-        camera_centres_obj = torch.linalg.inv(viewmats)[:, :3, 3]
+        train_ids, heldout_ids = holdout_split(len(sfm.images), holdout_every)
+        camera_centres_obj = torch.linalg.inv(viewmats)[train_ids, :3, 3]
         scene_scale = float((camera_centres_obj - camera_centres_obj.mean(0)).norm(dim=1).max()) * 1.1
 
         params, optimizers = self._init_params(points_obj, sfm.colors, scene_scale)
@@ -578,7 +743,7 @@ class SplatTrainer:
 
         rng = np.random.default_rng(0)
         for step in range(self._iterations):
-            i = int(rng.integers(len(targets)))
+            i = train_ids[int(rng.integers(len(train_ids)))]
             render, info = self._render(
                 params, viewmats[i : i + 1], ks[i : i + 1], width, height, rasterization
             )
@@ -599,16 +764,28 @@ class SplatTrainer:
                 print(f"[splat] step {step:5d} loss {loss.item():.4f} gaussians {len(params['means'])}")
 
         with torch.no_grad():
-            psnrs, previews = [], []
-            preview_ids = set(np.linspace(0, len(targets) - 1, 4).astype(int).tolist())
+            train_psnrs, heldout_psnrs, previews, heldout_previews = [], [], [], []
+            preview_train = {train_ids[j] for j in np.linspace(0, len(train_ids) - 1, 4).astype(int)}
+            preview_heldout = (
+                {heldout_ids[j] for j in np.linspace(0, len(heldout_ids) - 1, 4).astype(int)}
+                if heldout_ids
+                else set()
+            )
             for i, target in enumerate(targets):
                 render, _ = self._render(
                     params, viewmats[i : i + 1], ks[i : i + 1], width, height, rasterization
                 )
                 mse = float(((render - target) ** 2).mean())
-                psnrs.append(-10 * math.log10(max(mse, 1e-10)))
-                if i in preview_ids:
-                    previews.append((render.cpu().numpy(), target.cpu().numpy()))
+                psnr = -10 * math.log10(max(mse, 1e-10))
+                pair = (render.cpu().numpy(), target.cpu().numpy())
+                if i in heldout_ids:
+                    heldout_psnrs.append(psnr)
+                    if i in preview_heldout:
+                        heldout_previews.append(pair)
+                else:
+                    train_psnrs.append(psnr)
+                    if i in preview_train:
+                        previews.append(pair)
             out_ply.parent.mkdir(parents=True, exist_ok=True)
             export_splats(
                 means=params["means"],
@@ -620,7 +797,13 @@ class SplatTrainer:
                 format="ply",
                 save_to=str(out_ply),
             )
-        return TrainResult(float(np.mean(psnrs)), len(params["means"]), previews)
+        return TrainResult(
+            float(np.mean(train_psnrs)),
+            len(params["means"]),
+            previews,
+            float(np.mean(heldout_psnrs)) if heldout_psnrs else None,
+            heldout_previews,
+        )
 
     def _init_params(
         self, points: np.ndarray, colors: np.ndarray, scene_scale: float
@@ -628,9 +811,10 @@ class SplatTrainer:
         """Gaussians at the SfM points: isotropic scale from 3-NN distance, SH DC from point colour."""
         dev = self._device
         means = torch.tensor(points, dtype=torch.float32, device=dev)
-        dists = torch.cdist(means, means)
-        knn = dists.topk(4, largest=False).values[:, 1:]
-        log_scale = torch.log(knn.mean(dim=1).clamp_min(1e-7))[:, None].repeat(1, 3)
+        # KD-tree, not a dense N x N cdist: 50k points would ask for ~10 GB.
+        distances, _ = cKDTree(points).query(points, k=4)
+        knn_mean = torch.tensor(distances[:, 1:].mean(axis=1), dtype=torch.float32, device=dev)
+        log_scale = torch.log(knn_mean.clamp_min(1e-7))[:, None].repeat(1, 3)
         n = len(means)
         sh_c0 = 0.28209479177387814  # zeroth SH basis constant: colour = sh0 * C0 + 0.5
         sh0 = ((torch.tensor(colors, device=dev) - 0.5) / sh_c0)[:, None, :]

@@ -38,6 +38,7 @@ from hurobo.scan import (
     border_colour,
     crop_ply,
     object_frame_from_orbit,
+    preview_grid,
     split_tabletop_background,
     transform_ply,
 )
@@ -45,9 +46,7 @@ from hurobo.scan import (
 
 def save_preview(result: TrainResult, path: Path) -> None:
     """Write a photo | splat grid of a few training views."""
-    rows = [np.concatenate([photo, render], axis=1) for render, photo in result.previews]
-    preview = (np.concatenate(rows, axis=0) * 255).astype(np.uint8)
-    cv2.imwrite(str(path), cv2.cvtColor(preview, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(str(path), cv2.cvtColor(preview_grid(result.previews), cv2.COLOR_RGB2BGR))
 
 
 def scan_single_object(sfm: SfmResult, trainer: SplatTrainer, out_ply: Path) -> TrainResult:

@@ -19,6 +19,7 @@ from hurobo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, po
 
 if TYPE_CHECKING:
     from hurobo.hand import TrackedFrame
+    from hurobo.scan_sweep import SweepResult
     from hurobo.teleop_app import TeleopTrace
 
 #: Zeroth spherical-harmonic basis constant: colour = 0.5 + C0 * f_dc.
@@ -226,6 +227,112 @@ def sfm_figure(
         ]
     )
     figure.update_layout(**axis_layout(title))
+    return figure
+
+
+def sweep_cameras_figure(
+    result: SweepResult, title: str | None = None, every_nth_point: int = 1
+) -> go.Figure:
+    """The largest COLMAP model of one sweep config: sparse points and every registered camera.
+
+    Args:
+        result: one entry of `ScanSweep.load`.
+        title: figure title; defaults to the config name and how many keyframes registered.
+        every_nth_point: keep one sparse point in N, to keep a stored notebook small.
+    """
+    sfm = result.load_sfm()
+    summary = result.sfm_summary
+    keep = slice(None, None, every_nth_point)
+    return sfm_figure(
+        sfm.points_world[keep],
+        sfm.colors[keep],
+        sfm.t_world_cam_list,
+        title=title or f"{result.config.name}: {summary.num_registered}/{summary.num_images} registered",
+    )
+
+
+def sweep_figure(results: list[SweepResult], title: str = "Scan parameter sweep") -> go.Figure:
+    """One column per config: registration, how much of the orbit it covers, and splat PSNR.
+
+    PSNR is only measured on views that registered, so a config that reconstructs a short arc
+    can score well; the coverage row is what keeps that honest.
+
+    Args:
+        results: from `ScanSweep.load`; held-out PSNR may be None for a config.
+        title: figure title.
+
+    Returns:
+        A three-row `go.Figure`: registered share, orbit covered, train and held-out PSNR.
+    """
+    names = [r.config.name for r in results]
+    figure = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        subplot_titles=(
+            "Keyframes registered in the largest COLMAP model",
+            "Orbit the registered cameras cover (approximate for fragments)",
+            "Splat PSNR (only on views that registered)",
+        ),
+    )
+    details = [
+        f"matching: {r.config.sfm.matching}<br>SIFT threshold: {r.config.sfm.peak_threshold or 'default'}"
+        f"<br>frames: {r.config.num_frames} (every {r.keyframe_spacing_s:.2f} s)"
+        f"<br>iterations: {r.config.iterations}<br>COLMAP models: {r.sfm_summary.num_models}"
+        for r in results
+    ]
+    figure.add_trace(
+        go.Bar(
+            x=names,
+            y=[100 * r.sfm_summary.registered_fraction for r in results],
+            text=[f"{r.sfm_summary.num_registered}/{r.sfm_summary.num_images}" for r in results],
+            customdata=details,
+            hovertemplate="%{x}<br>%{y:.0f} % registered<br>%{customdata}<extra></extra>",
+            marker_color="#4c78a8",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Bar(
+            x=names,
+            y=[r.orbit_coverage_deg for r in results],
+            text=[f"{r.orbit_coverage_deg:.0f}°" for r in results],
+            hovertemplate="%{x}<br>%{y:.0f}° of 360° covered<extra></extra>",
+            marker_color="#54a24b",
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+    figure.add_trace(
+        go.Bar(
+            x=names,
+            y=[r.train_psnr_db for r in results],
+            name="training views",
+            marker_color="#b0b0b0",
+            hovertemplate="%{x}<br>%{y:.1f} dB on views it trained on<extra></extra>",
+        ),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Bar(
+            x=names,
+            y=[r.heldout_psnr_db for r in results],
+            name="held-out views",
+            marker_color="#f58518",
+            hovertemplate="%{x}<br>%{y:.1f} dB on views it never saw<extra></extra>",
+        ),
+        row=3,
+        col=1,
+    )
+    figure.update_yaxes(title_text="% of keyframes", range=[0, 105], row=1, col=1)
+    figure.update_yaxes(title_text="degrees", range=[0, 380], row=2, col=1)
+    figure.update_yaxes(title_text="PSNR [dB]", row=3, col=1)
+    figure.update_layout(title=title, height=760, barmode="group", legend={"orientation": "h", "y": -0.1})
     return figure
 
 
