@@ -1,0 +1,170 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>__TITLE__</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#ddd;font:13px system-ui,sans-serif}
+#panel{position:fixed;top:10px;left:10px;width:300px;padding:10px 12px;background:rgba(20,20,24,.88);
+  border-radius:8px;z-index:10;max-height:94vh;overflow:auto}
+#panel h3{margin:0 0 6px;font-size:14px}
+.row{display:grid;grid-template-columns:18px 1fr 1fr 54px;gap:6px;align-items:center;margin:3px 0}
+.row input[type=range]{width:100%}
+.val{font-variant-numeric:tabular-nums;font-size:11px;color:#9ab}
+button{margin:6px 6px 0 0;padding:5px 9px;border:0;border-radius:5px;background:#2a6df4;color:#fff;cursor:pointer}
+button.alt{background:#444}
+pre{margin:6px 0 0;font-size:11px;white-space:pre-wrap;color:#9c9}
+#status{margin-top:6px;color:#fc6}
+label{display:block;margin-top:6px}
+</style>
+<script type="importmap">{"imports":{
+ "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+ "@mkkellogg/gaussian-splats-3d":"https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"}}</script>
+</head><body>
+<div id="panel">
+  <h3>Crop box <span style="font-weight:normal;color:#789">(table frame, m)</span></h3>
+  <div id="sliders"></div>
+  <label>min opacity <input id="opacity" type="range" min="0" max="0.9" step="0.05" value="0">
+    <span class="val" id="opacityVal">0</span></label>
+  <label><input id="invert" type="checkbox"> remove what is inside the box (instead of keeping it)</label>
+  <button id="apply">Apply</button><button id="reset" class="alt">Reset</button>
+  <button id="download" class="alt">Download .ply</button>
+  <label><input id="showBox" type="checkbox" checked> show box</label>
+  <div id="status">loading...</div>
+  <pre id="readout"></pre>
+</div>
+<script type="module">
+import * as THREE from "three";
+import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
+
+const PLY_URL = "__PLY_NAME__";
+const $ = (id) => document.getElementById(id);
+const viewer = new GaussianSplats3D.Viewer({
+  cameraUp: [0, 0, 1], initialCameraPosition: __POSITION__, initialCameraLookAt: __LOOK_AT__,
+  sphericalHarmonicsDegree: 0, sharedMemoryForWorkers: false,
+});
+
+// ---- parse the binary little-endian PLY (all properties float32, as gsplat/DISCOVERSE write them)
+function parsePly(buffer) {
+  const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096)));
+  const end = head.indexOf("end_header\n") + "end_header\n".length;
+  const names = [...head.slice(0, end).matchAll(/property float (\w+)/g)].map((m) => m[1]);
+  const count = parseInt(head.match(/element vertex (\d+)/)[1]);
+  if (head.match(/property (?!float)\w+ \w+/)) throw new Error("only float32 PLY properties supported");
+  const stride = names.length;
+  return { header: head.slice(0, end), names, count, stride, // slice: the header length is not a multiple of 4, so a view at `end` would be misaligned.
+    data: new Float32Array(buffer.slice(end, end + count * stride * 4)) };
+}
+
+let ply, bounds, current = null, boxHelper = null;
+const axes = ["x", "y", "z"];
+const sliders = {};
+
+function buildSliders() {
+  axes.forEach((axis, a) => {
+    const column = new Float32Array(ply.count);
+    for (let i = 0; i < ply.count; i++) column[i] = ply.data[i * ply.stride + a];
+    let min = Infinity, max = -Infinity;
+    for (const v of column) { if (v < min) min = v; if (v > max) max = v; }
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<b>${axis}</b><input type="range" step="0.005" min="${min}" max="${max}" value="${min}">
+      <input type="range" step="0.005" min="${min}" max="${max}" value="${max}"><span class="val"></span>`;
+    $("sliders").appendChild(row);
+    const [lower, upper] = row.querySelectorAll("input");
+    sliders[axis] = { lower, upper, label: row.querySelector(".val"), min, max };
+    [lower, upper].forEach((el) => el.addEventListener("input", onBoxChange));
+  });
+}
+
+function box() {
+  const b = {};
+  axes.forEach((axis) => {
+    const s = sliders[axis];
+    b[axis] = [Math.min(+s.lower.value, +s.upper.value), Math.max(+s.lower.value, +s.upper.value)];
+  });
+  return b;
+}
+
+function onBoxChange() {
+  const b = box();
+  axes.forEach((axis) => {
+    sliders[axis].label.textContent = `${b[axis][0].toFixed(2)}..${b[axis][1].toFixed(2)}`;
+  });
+  $("opacityVal").textContent = (+$("opacity").value).toFixed(2);
+  const f = (v) => v.toFixed(3);
+  $("readout").textContent =
+    `CropBox(${f(b.x[0])}, ${f(b.x[1])}, ${f(b.y[0])}, ${f(b.y[1])}, ${f(b.z[0])}, ${f(b.z[1])})` +
+    "  # hurobo.scan.CropBox(x_min, x_max, y_min, y_max, z_min, z_max)";
+  drawBox(b);
+}
+
+function drawBox(b) {
+  if (boxHelper) { viewer.threeScene.remove(boxHelper); boxHelper.geometry.dispose(); boxHelper = null; }
+  if (!$("showBox").checked) return;
+  const size = new THREE.Vector3(b.x[1] - b.x[0], b.y[1] - b.y[0], b.z[1] - b.z[0]);
+  const centre = new THREE.Vector3((b.x[0] + b.x[1]) / 2, (b.y[0] + b.y[1]) / 2, (b.z[0] + b.z[1]) / 2);
+  const edges = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z));
+  boxHelper = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffcc }));
+  boxHelper.position.copy(centre);
+  viewer.threeScene.add(boxHelper);
+}
+
+function filtered() {
+  const b = box(), invert = $("invert").checked, minOpacity = +$("opacity").value;
+  const opacityCol = ply.names.indexOf("opacity");
+  const keep = [];
+  for (let i = 0; i < ply.count; i++) {
+    const o = i * ply.stride;
+    const inside = ply.data[o] >= b.x[0] && ply.data[o] <= b.x[1] && ply.data[o + 1] >= b.y[0] &&
+      ply.data[o + 1] <= b.y[1] && ply.data[o + 2] >= b.z[0] && ply.data[o + 2] <= b.z[1];
+    if (inside === invert) continue;
+    // opacity is stored as a logit
+    if (minOpacity > 0 && 1 / (1 + Math.exp(-ply.data[o + opacityCol])) < minOpacity) continue;
+    keep.push(i);
+  }
+  const out = new Float32Array(keep.length * ply.stride);
+  keep.forEach((i, j) => out.set(ply.data.subarray(i * ply.stride, (i + 1) * ply.stride), j * ply.stride));
+  const header = ply.header.replace(/element vertex \d+/, `element vertex ${keep.length}`);
+  return { blob: new Blob([new TextEncoder().encode(header), out]), count: keep.length };
+}
+
+async function showBlob(blob, count) {
+  $("status").textContent = `drawing ${count.toLocaleString()} Gaussians...`;
+  if (current) URL.revokeObjectURL(current.url);
+  current = { blob, url: URL.createObjectURL(blob) };
+  if (viewer.splatMesh && viewer.splatMesh.getSceneCount() > 0) await viewer.removeSplatScene(0, false);
+  await viewer.addSplatScene(current.url, {
+    format: GaussianSplats3D.SceneFormat.Ply, showLoadingUI: false, splatAlphaRemovalThreshold: 5,
+  });
+  $("status").textContent = `${count.toLocaleString()} of ${ply.count.toLocaleString()} Gaussians shown`;
+}
+
+async function apply() {
+  $("status").textContent = "filtering...";
+  await new Promise((r) => setTimeout(r));  // let the status paint
+  const { blob, count } = filtered();
+  await showBlob(blob, count);
+}
+
+function reset() {
+  axes.forEach((axis) => { const s = sliders[axis]; s.lower.value = s.min; s.upper.value = s.max; });
+  $("opacity").value = 0; $("invert").checked = false;
+  onBoxChange();
+  return apply();
+}
+
+$("apply").onclick = apply;
+$("reset").onclick = reset;
+$("opacity").oninput = onBoxChange;
+$("showBox").onchange = onBoxChange;
+$("download").onclick = () => {
+  if (!current) return;
+  const a = document.createElement("a");
+  a.href = current.url; a.download = "filtered_splat.ply"; a.click();
+};
+
+const response = await fetch(PLY_URL);
+ply = parsePly(await response.arrayBuffer());
+buildSliders();
+onBoxChange();
+await apply();
+viewer.start();
+</script></body></html>

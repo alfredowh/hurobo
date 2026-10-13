@@ -22,6 +22,7 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
 
+from hurobo.scan import SfmResult, Similarity
 from hurobo.utils.transforms import look_at_t_cam_world
 
 #: robosuite puts visual geoms in group 1 and collision geoms in group 0; only
@@ -305,6 +306,158 @@ def render_splat_orbit(
         over = render[0] + (1.0 - alpha[0]) * background
         images.append((over.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
     return images
+
+
+@torch.no_grad()
+def render_splat_views(
+    ply_path: Path,
+    t_cam_world_list: list[np.ndarray],
+    ks: list[np.ndarray],
+    width: int,
+    height: int,
+    background: float = 0.0,
+    device: str = "cuda",
+) -> list[np.ndarray]:
+    """Rasterise a splat from given cameras, e.g. the phone's own path through the scene.
+
+    Args:
+        ply_path: 3DGS `.ply`.
+        t_cam_world_list: 4x4 world -> OpenCV camera transforms, in the splat's frame.
+        ks: 3x3 pinhole intrinsics, one per camera, at (width, height).
+        width: image width in pixels.
+        height: image height in pixels.
+        background: grey level in [0, 1] behind the splat (the scan was trained on black).
+        device: torch device.
+
+    Returns:
+        One (height, width, 3) uint8 RGB image per camera.
+    """
+    from gaussian_renderer import load_ply
+    from gsplat.rendering import rasterization
+
+    gaussians = load_ply(str(ply_path))
+
+    def to_dev(array: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(np.ascontiguousarray(array)).float().to(device)
+
+    means, quats, scales = to_dev(gaussians.xyz), to_dev(gaussians.rot), to_dev(gaussians.scale)
+    opacities, colors = to_dev(gaussians.opacity), to_dev(gaussians.sh[:, :3])[:, None, :]
+    images = []
+    for t_cam_world, k in zip(t_cam_world_list, ks, strict=True):
+        render, alpha, _ = rasterization(
+            means=means,
+            quats=quats,
+            scales=scales,
+            opacities=opacities,
+            colors=colors,
+            viewmats=to_dev(t_cam_world)[None],
+            Ks=to_dev(k)[None],
+            width=width,
+            height=height,
+            sh_degree=0,
+        )
+        over = render[0] + (1.0 - alpha[0]) * background
+        images.append((over.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+    return images
+
+
+def render_scan_path(
+    ply_path: Path, sfm: SfmResult, similarity: Similarity, num_views: int = 12
+) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:
+    """Render a scan's splat from evenly spaced keyframe cameras, next to the photos they were taken from.
+
+    Args:
+        ply_path: the splat, already moved into the similarity's destination frame (`transform_ply`).
+        sfm: the scan's posed keyframes (SfM frame).
+        similarity: SfM frame -> the splat's frame.
+        num_views: keyframes to render, spread over the whole capture path.
+
+    Returns:
+        (keyframe indices, photos, renders), photos and renders as (H, W, 3) uint8 RGB.
+    """
+    t_cam_world = sfm.t_cam_world_in(similarity)
+    ids = sorted({int(i) for i in np.linspace(0, len(sfm.images) - 1, num_views).round()})
+    height, width = sfm.images[0].image_rgb.shape[:2]
+    renders = render_splat_views(
+        ply_path, [t_cam_world[i] for i in ids], [sfm.images[i].k for i in ids], width, height
+    )
+    photos = [(sfm.images[i].image_rgb * 255).astype(np.uint8) for i in ids]
+    return ids, photos, renders
+
+
+def render_asset_composites(
+    asset_sets: dict[str, list[SplatAsset]],
+    size: int = 384,
+    camera_names: tuple[str, ...] = ("agentview",),
+    suite: str = "libero_goal",
+    task_id: int = 8,
+) -> dict[str, np.ndarray]:
+    """Each asset set composited into LIBERO's initial scene; one image per set, cameras side by side.
+
+    Args:
+        asset_sets: label -> splats to attach (see `build_assets`).
+        size: square size of one camera image in pixels.
+        camera_names: LIBERO cameras to render, joined left to right.
+        suite: LIBERO suite name.
+        task_id: task index in the suite.
+
+    Returns:
+        label -> (size, size * len(camera_names), 3) uint8 RGB depth composite (splats + mesh robot).
+    """
+    from hurobo.sim import LiberoTask
+
+    task = LiberoTask(suite, task_id)
+    task.reset()
+    images = {}
+    try:
+        for label, assets in asset_sets.items():
+            compositor = SplatCompositor(
+                task.mj_model,
+                assets,
+                hidden_body_roots=LIBERO_GOAL_DISTRACTOR_ROOTS,
+                width=size,
+                height=size,
+            )
+            try:
+                views = [compositor.render_layers(task.mj_data, name)["composite"] for name in camera_names]
+                images[label] = np.concatenate(views, axis=1)
+            finally:
+                compositor.close()
+    finally:
+        task.close()
+    return images
+
+
+def render_bowl_composites(
+    bowl_plys: dict[str, Path],
+    size: int = 384,
+    camera_name: str = "agentview",
+    suite: str = "libero_goal",
+    task_id: int = 8,
+    bowl_fit: SplatFit = SplatFit.MATCH_BODY_XY,
+) -> dict[str, np.ndarray]:
+    """Each bowl splat attached in turn to LIBERO's bowl body; one composited camera image per splat.
+
+    The table and plate use the DISCOVERSE stand-ins, so only the bowl differs between images.
+
+    Args:
+        bowl_plys: label -> object splat (z-up, base at z = 0), e.g. from `extract_object_splat`.
+        size: square image size in pixels.
+        camera_name: LIBERO camera to render.
+        suite: LIBERO suite name.
+        task_id: task index in the suite.
+        bowl_fit: how each splat is fitted to the body.
+
+    Returns:
+        label -> (size, size, 3) uint8 RGB depth composite (splats + mesh robot).
+    """
+    return render_asset_composites(
+        {label: build_assets(bowl_ply=ply, bowl_fit=bowl_fit) for label, ply in bowl_plys.items()},
+        size=size,
+        camera_names=(camera_name,),
+        suite=suite,
+        task_id=task_id,
+    )
 
 
 def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:

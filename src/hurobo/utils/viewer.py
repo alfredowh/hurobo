@@ -18,7 +18,11 @@ from hurobo.demo import GraspSegmenter
 from hurobo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, polyline_with_breaks
 
 if TYPE_CHECKING:
+    from hurobo.capture_plan import CameraPlacement, PlannedClip
     from hurobo.hand import TrackedFrame
+    from hurobo.real_setup import RealSetup
+    from hurobo.scan import CropCylinder
+    from hurobo.scan_crop import FloorPlane
     from hurobo.scan_sweep import SweepResult
     from hurobo.teleop_app import TeleopTrace
 
@@ -132,13 +136,19 @@ def splat_figure(
     return figure
 
 
-def orbit_figure(images: list[np.ndarray], title: str = "Splat orbit render", height: int = 560) -> go.Figure:
-    """Rendered orbit views as a slider-driven image, one frame per camera azimuth.
+def orbit_figure(
+    images: list[np.ndarray],
+    title: str = "Splat orbit render",
+    height: int = 560,
+    labels: list[str] | None = None,
+) -> go.Figure:
+    """Rendered views as a slider-driven image, one frame per camera (by default per azimuth).
 
     Args:
         images: (H, W, 3) uint8 RGB views in azimuth order (see `hurobo.splat.render_splat_orbit`).
         title: figure title.
         height: figure height in pixels.
+        labels: slider label per image, for views that are not an orbit; default is the azimuth.
 
     Returns:
         A `go.Figure`; drag the slider to orbit the object.
@@ -156,7 +166,7 @@ def orbit_figure(images: list[np.ndarray], title: str = "Splat orbit render", he
     )
     steps = [
         {
-            "label": f"{round(360 * i / len(images))}°",
+            "label": labels[i] if labels else f"{round(360 * i / len(images))}°",
             "method": "animate",
             "args": [[str(i)], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}}],
         }
@@ -166,7 +176,7 @@ def orbit_figure(images: list[np.ndarray], title: str = "Splat orbit render", he
         title=title,
         height=height,
         margin={"l": 0, "r": 0, "t": 40, "b": 0},
-        sliders=[{"steps": steps, "currentvalue": {"prefix": "azimuth: "}}],
+        sliders=[{"steps": steps, "currentvalue": {"prefix": "view: " if labels else "azimuth: "}}],
         xaxis={"visible": False},
         yaxis={"visible": False},
     )
@@ -226,6 +236,82 @@ def sfm_figure(
             camera_frustum_trace(t_world_cam_list, scale=0.08 * float(np.ptp(points_world, axis=0).max())),
         ]
     )
+    figure.update_layout(**axis_layout(title))
+    return figure
+
+
+def _cylinder_wireframe(cylinder: CropCylinder, name: str, colour: str, segments: int = 48) -> go.Scatter3d:
+    """Top and bottom circles of a crop cylinder plus four vertical edges, as one broken polyline."""
+    angle = np.linspace(0.0, 2 * np.pi, segments + 1)
+    cx, cy = cylinder.centre_xy
+    xs, ys = cx + cylinder.radius * np.cos(angle), cy + cylinder.radius * np.sin(angle)
+    x, y, z = [], [], []
+    for height in (cylinder.z_min, cylinder.z_max):
+        x += [*xs, None]
+        y += [*ys, None]
+        z += [*np.full(len(xs), height), None]
+    for k in range(0, segments, segments // 4):
+        x += [xs[k], xs[k], None]
+        y += [ys[k], ys[k], None]
+        z += [cylinder.z_min, cylinder.z_max, None]
+    return go.Scatter3d(x=x, y=y, z=z, mode="lines", name=name, line={"color": colour, "width": 5})
+
+
+def crop_figure(
+    points: np.ndarray,
+    colors: np.ndarray,
+    cylinders: dict[str, CropCylinder],
+    floor: FloorPlane | None = None,
+    title: str = "Object crop",
+    max_points: int = 2500,
+) -> go.Figure:
+    """Sparse points with one or more crop cylinders (and the fitted floor), to judge a crop by eye.
+
+    Args:
+        points: shape (P, 3) sparse points in the cylinders' z-up frame.
+        colors: shape (P, 3) in [0, 1].
+        cylinders: label -> crop cylinder; each is drawn as a wireframe.
+        floor: optional fitted floor plane, drawn as a translucent sheet under the points.
+        title: figure title.
+        max_points: points are subsampled to about this many to keep the figure light.
+    """
+    keep = slice(None, None, max(1, len(points) // max_points))
+    rgb = (np.clip(colors[keep], 0, 1) * 255).astype(np.uint8)
+    traces: list[go.BaseTraceType] = [
+        go.Scatter3d(
+            x=points[keep, 0],
+            y=points[keep, 1],
+            z=points[keep, 2],
+            mode="markers",
+            name="sparse points",
+            marker={"size": 1.8, "color": _rgb_strings(rgb)},
+            hoverinfo="skip",
+        )
+    ]
+    palette = ["#d62728", "#1f77b4", "#2ca02c", "#9467bd"]
+    reach = max(c.radius for c in cylinders.values())
+    for (label, cylinder), colour in zip(cylinders.items(), palette, strict=False):
+        traces.append(_cylinder_wireframe(cylinder, label, colour))
+    if floor is not None:
+        centre = next(iter(cylinders.values())).centre_xy
+        half = min(1.1 * reach, 1.5 * float(np.ptp(points[:, :2], axis=0).max()))
+        gx, gy = np.meshgrid([centre[0] - half, centre[0] + half], [centre[1] - half, centre[1] + half])
+        gz = np.vectorize(lambda a, b: floor.z_at(np.array([a, b])))(gx, gy)
+        traces.append(
+            go.Mesh3d(
+                x=gx.ravel(),
+                y=gy.ravel(),
+                z=gz.ravel(),
+                i=[0, 0],
+                j=[1, 2],
+                k=[3, 3],
+                color="grey",
+                opacity=0.25,
+                name="floor (RANSAC)",
+                hoverinfo="skip",
+            )
+        )
+    figure = go.Figure(traces)
     figure.update_layout(**axis_layout(title))
     return figure
 
@@ -995,4 +1081,155 @@ def teleop_tracking_figure(trace: TeleopTrace, title: str = "Teleoperation track
     if trace.cube_spawn_step is not None:
         figure.add_vline(x=t[trace.cube_spawn_step], line_dash="dash", annotation_text="cube spawns")
     figure.update_layout(title=title, height=720, xaxis4_title="sim time (s)")
+    return figure
+
+
+_SPLAT_VIEWER_TEMPLATE = Path(__file__).with_name("splat_viewer.html")
+
+
+def write_splat_viewer(ply_path: Path, out_dir: Path, title: str = "Gaussian splat") -> Path:
+    """Write a WebGL viewer page that renders the full Gaussians of a splat, orbitable with the mouse.
+
+    The page has a panel to crop by a 3D box (x/y/z min and max sliders, drawn as a wireframe), keep or
+    remove what is inside it, drop low-opacity Gaussians, and download the filtered `.ply`; it prints
+    the box as `CropBox(...)` arguments for `hurobo.scan.crop_ply`.
+
+    The page loads the `.ply` over HTTP (browsers block `file://` fetches), so serve `out_dir`,
+    e.g. `python -m http.server -d <out_dir>`. Three.js and the splat viewer come from jsDelivr.
+
+    Args:
+        ply_path: standard 3DGS `.ply`, z up.
+        out_dir: directory for the page; the `.ply` is symlinked next to it.
+        title: page title.
+
+    Returns:
+        Path of the written `index.html`.
+    """
+    from hurobo.splat import splat_centre_and_radius
+
+    gaussians = load_ply(str(ply_path))
+    centre, radius = splat_centre_and_radius(gaussians.xyz, gaussians.opacity)
+    position = (centre + radius * np.array([0.0, -1.2, 0.9])).round(3).tolist()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    link = out_dir / ply_path.name
+    link.unlink(missing_ok=True)
+    link.symlink_to(ply_path.resolve())
+    page = out_dir / "index.html"
+    html = (
+        _SPLAT_VIEWER_TEMPLATE.read_text()
+        .replace("__TITLE__", title)
+        .replace("__PLY_NAME__", ply_path.name)
+        .replace("__POSITION__", str(position))
+        .replace("__LOOK_AT__", str(centre.round(3).tolist()))
+    )
+    page.write_text(html)
+    return page
+
+
+def capture_plan_figure(
+    setup: RealSetup,
+    work_rect_table: tuple[float, float, float, float],
+    clips: list[PlannedClip],
+    camera: CameraPlacement | None = None,
+    hand_start_xy: dict[str, np.ndarray] | None = None,
+    title: str = "Recording plan (top view, table frame)",
+) -> go.Figure:
+    """Top view of the real table: board, work area, the planned object positions, and the phone.
+
+    Args:
+        setup: measured table, board and objects.
+        work_rect_table: (x_min, x_max, y_min, y_max) of the work area in the table frame.
+        clips: the planned clips; bowls are drawn small and plates large, numbered by clip.
+        camera: the phone pose to draw, with its horizontal field of view.
+        hand_start_xy: hand start name -> table-frame xy, drawn as diamonds around the work area.
+        title: figure title.
+    """
+    table, board = setup.table, setup.board
+    figure = go.Figure()
+
+    def rectangle(x0: float, x1: float, y0: float, y1: float, colour: str, fill: str, name: str) -> None:
+        figure.add_shape(
+            type="rect", x0=x0, x1=x1, y0=y0, y1=y1, line={"color": colour, "width": 2}, fillcolor=fill
+        )
+        figure.add_annotation(x=(x0 + x1) / 2, y=y1, text=name, showarrow=False, yshift=10, font={"size": 11})
+
+    rectangle(
+        table.left_edge_x_m,
+        table.right_edge_x_m,
+        table.near_edge_y_m,
+        table.far_edge_y_m,
+        "#8c6d46",
+        "rgba(190,160,120,0.25)",
+        "table",
+    )
+    rectangle(0.0, board.width_m, -board.height_m, 0.0, "#222", "rgba(40,40,40,0.5)", "board")
+    x0, x1, y0, y1 = work_rect_table
+    rectangle(x0, x1, y0, y1, "#2a9d8f", "rgba(42,157,143,0.10)", "object centres go in here")
+
+    def circle(centre: np.ndarray, radius: float, colour: str, label: str) -> None:
+        figure.add_shape(
+            type="circle",
+            x0=centre[0] - radius,
+            x1=centre[0] + radius,
+            y0=centre[1] - radius,
+            y1=centre[1] + radius,
+            line={"color": colour, "width": 1},
+            fillcolor=colour.replace("1)", "0.12)"),
+        )
+        figure.add_annotation(
+            x=centre[0], y=centre[1], text=label, showarrow=False, font={"size": 10, "color": colour}
+        )
+
+    for clip in clips:
+        circle(clip.plate_xy_table, setup.plate.radius_m, "rgba(220,60,60,1)", str(clip.index))
+        circle(clip.bowl_xy_table, setup.bowl.radius_m, "rgba(40,90,200,1)", str(clip.index))
+    if hand_start_xy:
+        points = np.array(list(hand_start_xy.values()))
+        figure.add_trace(
+            go.Scatter(
+                x=points[:, 0],
+                y=points[:, 1],
+                mode="markers+text",
+                text=list(hand_start_xy),
+                textposition="top center",
+                marker={"symbol": "diamond", "size": 10, "color": "#e9a000"},
+                name="hand starts",
+            )
+        )
+    if camera is not None:
+        position = camera.position_table[:2]
+        heading = camera.t_table_cam[:2, 2]
+        heading = heading / np.linalg.norm(heading)
+        half_fov = np.radians(camera.horizontal_fov_deg / 2)
+        for sign in (-1, 1):
+            c, s = np.cos(sign * half_fov), np.sin(sign * half_fov)
+            edge = np.array([c * heading[0] - s * heading[1], s * heading[0] + c * heading[1]])
+            tip = position + 1.3 * edge
+            figure.add_trace(
+                go.Scatter(
+                    x=[position[0], tip[0]],
+                    y=[position[1], tip[1]],
+                    mode="lines",
+                    line={"color": "#6a4c93", "dash": "dot"},
+                    showlegend=False,
+                )
+            )
+        figure.add_trace(
+            go.Scatter(
+                x=[position[0]],
+                y=[position[1]],
+                mode="markers+text",
+                text=[f"phone ({camera.height_m:.2f} m up)"],
+                textposition="bottom center",
+                marker={"symbol": "triangle-up", "size": 14, "color": "#6a4c93"},
+                name="phone",
+            )
+        )
+    figure.update_layout(
+        title=title,
+        height=620,
+        xaxis={"title": "table x (m), along the board's long side", "scaleanchor": "y", "scaleratio": 1},
+        yaxis={"title": "table y (m), away from you"},
+        showlegend=False,
+    )
     return figure

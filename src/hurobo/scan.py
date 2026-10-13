@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import shutil
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -44,6 +45,9 @@ class KeyframeSampler:
     def sample(self, video_path: Path, out_dir: Path) -> list[Path]:
         """Write the keyframes as PNGs and return their paths, in time order.
 
+        The video is streamed: only the sharpest candidate of the current time bin is kept in
+        memory, so a long 1080p clip no longer needs the whole decoded video in RAM.
+
         Args:
             video_path: the orbit video.
             out_dir: emptied and refilled with `frame_XXXX.png` files.
@@ -51,22 +55,92 @@ class KeyframeSampler:
         Returns:
             Paths of the written keyframes.
         """
-        frames = list(read_frames(video_path))
-        bins = np.array_split(np.arange(len(frames)), min(self._num_frames, len(frames)))
+        total = _frame_count(video_path)
+        num_bins = min(self._num_frames, total)
+        # Same bin sizes as np.array_split(np.arange(total), num_bins).
+        sizes = [total // num_bins + (1 if i < total % num_bins else 0) for i in range(num_bins)]
+        edges = np.cumsum([0, *sizes])
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
-        paths = []
-        for i, frame_ids in enumerate(bins):
-            best = max(frame_ids, key=lambda idx: sharpness(frames[idx]))
-            image = frames[best]
+
+        paths: list[Path] = []
+        best_frame: np.ndarray | None = None
+        best_sharpness = -1.0
+        current_bin = 0
+
+        def flush() -> None:
+            nonlocal best_frame, best_sharpness
+            if best_frame is None:
+                return
+            image = best_frame
             scale = self._max_side_px / max(image.shape[:2])
             if scale < 1.0:
                 image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-            path = out_dir / f"frame_{i:04d}.png"
+            path = out_dir / f"frame_{len(paths):04d}.png"
             cv2.imwrite(str(path), image)
             paths.append(path)
+            best_frame, best_sharpness = None, -1.0
+
+        for index, frame in enumerate(read_frames(video_path)):
+            # Frames beyond the container's reported count fall into the last bin.
+            frame_bin = min(int(np.searchsorted(edges, index, side="right")) - 1, num_bins - 1)
+            if frame_bin != current_bin:
+                flush()
+                current_bin = frame_bin
+            value = sharpness(frame)
+            if value > best_sharpness:
+                best_frame, best_sharpness = frame, value
+        flush()
         return paths
+
+    def sample_many(self, video_paths: list[Path], out_dir: Path) -> list[Path]:
+        """Keyframes of several clips of one scene in a single folder, so SfM can register them together.
+
+        The frame budget is split in proportion to clip length, which keeps the keyframe spacing
+        equal across clips. Clips are written in the order given.
+
+        Args:
+            video_paths: clips filmed with the same lens settings (one shared camera in SfM).
+            out_dir: emptied and refilled with `frame_XXXX.png` files.
+
+        Returns:
+            Paths of the written keyframes.
+
+        Raises:
+            ValueError: if the clips decode to different image sizes.
+        """
+        counts = [_frame_count(path) for path in video_paths]
+        budgets = [max(1, round(self._num_frames * count / sum(counts))) for count in counts]
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+        part_dir = out_dir.with_name(out_dir.name + "_part")
+        paths: list[Path] = []
+        sizes: set[tuple[int, ...]] = set()
+        try:
+            for path, budget in zip(video_paths, budgets, strict=True):
+                for part in KeyframeSampler(budget, self._max_side_px).sample(path, part_dir):
+                    image = cv2.imread(str(part))
+                    sizes.add(image.shape[:2])
+                    target = out_dir / f"frame_{len(paths):04d}.png"
+                    shutil.move(str(part), target)
+                    paths.append(target)
+        finally:
+            shutil.rmtree(part_dir, ignore_errors=True)
+        if len(sizes) > 1:
+            raise ValueError(f"clips decode to different image sizes {sorted(sizes)}; SfM needs one camera")
+        return paths
+
+
+def _frame_count(video_path: Path) -> int:
+    """Number of frames in a video: the container's count, or a decode pass if it reports none."""
+    capture = cv2.VideoCapture(str(video_path))
+    try:
+        count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    finally:
+        capture.release()
+    return count if count > 0 else sum(1 for _ in read_frames(video_path))
 
 
 @dataclass
@@ -108,6 +182,27 @@ class SfmResult:
         """4x4 camera-to-world transforms of the keyframes (OpenCV camera axes)."""
         return [np.linalg.inv(im.t_cam_world) for im in self.images]
 
+    def t_cam_world_in(self, similarity: Similarity) -> list[np.ndarray]:
+        """World -> camera transforms for a splat that was moved with `transform_ply(..., similarity)`.
+
+        The camera frame is scaled with the world so that depths are in the similarity's destination
+        units (metres for a ChArUco alignment); pixel projections are unchanged by that scaling.
+
+        Args:
+            similarity: SfM frame -> destination frame, e.g. from `align_charuco_table`.
+
+        Returns:
+            One 4x4 matrix per keyframe, in `images` order.
+        """
+        matrices = []
+        for im in self.images:
+            rotation = im.t_cam_world[:3, :3] @ similarity.rotation.T
+            matrix = np.eye(4)
+            matrix[:3, :3] = rotation
+            matrix[:3, 3] = similarity.scale * im.t_cam_world[:3, 3] - rotation @ similarity.translation
+            matrices.append(matrix)
+        return matrices
+
     def in_frame(self, t_new_world: np.ndarray) -> SfmResult:
         """The same reconstruction re-expressed in another frame (points and cameras move, pixels don't).
 
@@ -142,6 +237,16 @@ class SfmOptions:
     matching: Literal["sequential", "exhaustive"] = "sequential"
     overlap: int = 15
     init_min_tri_angle_deg: float | None = None
+
+    @classmethod
+    def robust(cls) -> SfmOptions:
+        """Settings that registered every keyframe of a low-contrast phone clip (design log D-001)."""
+        return cls(peak_threshold=0.002, max_ratio=0.9)
+
+    @classmethod
+    def robust_exhaustive(cls) -> SfmOptions:
+        """`robust` plus exhaustive matching and an easier initial pair, for weak sequential links."""
+        return cls(peak_threshold=0.002, max_ratio=0.9, matching="exhaustive", init_min_tri_angle_deg=4.0)
 
 
 @dataclass
@@ -205,16 +310,40 @@ class SfmReconstructor:
     close enough to distortion-free that the splat trainer can then use plain K.
 
     Attributes:
-        last_summary: registration statistics of the most recent `run`, or None before the first.
+        last_summary: registration statistics of the run that produced the returned
+            reconstruction, or None before the first `run`.
     """
 
-    def __init__(self, options: SfmOptions | None = None) -> None:
-        """Set the COLMAP options; None means COLMAP's defaults with sequential matching."""
+    def __init__(
+        self,
+        options: SfmOptions | None = None,
+        fallback: SfmOptions | None = None,
+        min_registered_fraction: float = 0.8,
+    ) -> None:
+        """Set the COLMAP options.
+
+        Args:
+            options: None means COLMAP's defaults with sequential matching.
+            fallback: options to retry with when fewer than `min_registered_fraction` of the
+                images registered; the better of the two runs is kept. None disables the retry.
+            min_registered_fraction: share of keyframes the largest model must hold to be
+                accepted without a retry or a warning.
+        """
         self._options = options or SfmOptions()
+        self._fallback = fallback
+        self._min_fraction = min_registered_fraction
         self.last_summary: SfmSummary | None = None
+
+    @classmethod
+    def robust(cls) -> SfmReconstructor:
+        """`SfmOptions.robust`, retrying with exhaustive matching when too few keyframes register."""
+        return cls(SfmOptions.robust(), fallback=SfmOptions.robust_exhaustive())
 
     def run(self, image_dir: Path, work_dir: Path) -> SfmResult:
         """Reconstruct, keep the largest model, and load its registered images.
+
+        If the largest model holds too small a share of the keyframes and a fallback is set,
+        reconstruct again with the fallback and keep the run that registered more.
 
         Args:
             image_dir: keyframes from `KeyframeSampler`.
@@ -226,6 +355,32 @@ class SfmReconstructor:
         Raises:
             RuntimeError: if SfM registers no model at all.
         """
+        result, summary = self._run_once(image_dir, work_dir, self._options)
+        if self._fallback is not None and summary.registered_fraction < self._min_fraction:
+            print(
+                f"[SfM] only {summary.num_registered}/{summary.num_images} registered; "
+                f"retrying with {self._fallback.matching} matching"
+            )
+            retry_dir = work_dir.with_name(work_dir.name + "_fallback")
+            retry, retry_summary = self._run_once(image_dir, retry_dir, self._fallback)
+            if retry_summary.num_registered > summary.num_registered:
+                shutil.rmtree(work_dir)
+                shutil.move(str(retry_dir), str(work_dir))
+                result, summary = retry, retry_summary
+            else:
+                shutil.rmtree(retry_dir)
+        self.last_summary = summary
+        if summary.registered_fraction < self._min_fraction:
+            warnings.warn(
+                f"SfM registered only {summary.num_registered}/{summary.num_images} keyframes "
+                f"({summary.num_models} model(s)); the splat will cover part of the orbit. "
+                "Re-film slower and more evenly, or add texture around the object.",
+                stacklevel=2,
+            )
+        return result
+
+    def _run_once(self, image_dir: Path, work_dir: Path, options: SfmOptions) -> tuple[SfmResult, SfmSummary]:
+        """One COLMAP run with `options`; returns the largest model and its registration summary."""
         import pycolmap
 
         if work_dir.exists():
@@ -239,33 +394,33 @@ class SfmReconstructor:
             image_dir,
             camera_mode=pycolmap.CameraMode.SINGLE,
             reader_options=reader,
-            extraction_options=colmap_extraction_options(self._options),
+            extraction_options=colmap_extraction_options(options),
         )
-        matching = colmap_matching_options(self._options)
-        if self._options.matching == "exhaustive":
+        matching = colmap_matching_options(options)
+        if options.matching == "exhaustive":
             pycolmap.match_exhaustive(database, matching_options=matching)
         else:
             pairing = pycolmap.SequentialPairingOptions()
-            pairing.overlap = self._options.overlap
+            pairing.overlap = options.overlap
             # A turntable or orbit comes back to its start; loop closure needs these pairs too.
             pairing.quadratic_overlap = True
             pycolmap.match_sequential(database, matching_options=matching, pairing_options=pairing)
         models = pycolmap.incremental_mapping(
-            database, image_dir, work_dir / "sparse", colmap_pipeline_options(self._options)
+            database, image_dir, work_dir / "sparse", colmap_pipeline_options(options)
         )
         if not models:
             raise RuntimeError("SfM registered no images; orbit too fast, too blurry or too textureless")
         model = largest_model(list(models.values()))
         num_images = len(list(image_dir.glob("*.png")))
-        self.last_summary = SfmSummary(
+        summary = SfmSummary(
             num_images=num_images,
             num_registered=model.num_reg_images(),
             num_models=len(models),
             num_points=model.num_points3D(),
             mean_reprojection_px=float(model.compute_mean_reprojection_error()),
         )
-        print(f"[SfM] registered {model.num_reg_images()}/{num_images} images in {len(models)} model(s)")
-        return sfm_result_from_model(model, image_dir)
+        print(f"[SfM] registered {summary.num_registered}/{num_images} images in {len(models)} model(s)")
+        return sfm_result_from_model(model, image_dir), summary
 
 
 def largest_model(models: list):
@@ -406,13 +561,37 @@ class CropCylinder:
         )
 
 
-def crop_ply(ply_in: Path, ply_out: Path, cylinders: list[CropCylinder], keep_inside: bool = True) -> int:
-    """Filter a 3DGS .ply by cylinders: keep Gaussians inside any of them, or only those outside all.
+@dataclass
+class CropBox:
+    """Axis-aligned box in a z-up frame; fits a rectangular tabletop better than a cylinder.
+
+    Attributes:
+        x_min, x_max, y_min, y_max, z_min, z_max: bounds in the frame's units.
+    """
+
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+    z_min: float
+    z_max: float
+
+    def contains(self, xyz: np.ndarray) -> np.ndarray:
+        """Boolean mask of the points inside the box."""
+        lower = np.array([self.x_min, self.y_min, self.z_min])
+        upper = np.array([self.x_max, self.y_max, self.z_max])
+        return np.all((xyz >= lower) & (xyz <= upper), axis=1)
+
+
+def crop_ply(
+    ply_in: Path, ply_out: Path, cylinders: list[CropCylinder | CropBox], keep_inside: bool = True
+) -> int:
+    """Filter a 3DGS .ply by cylinders/boxes: keep Gaussians inside any of them, or only those outside all.
 
     Args:
-        ply_in: source splat, already in the cylinders' frame.
+        ply_in: source splat, already in the crop regions' frame.
         ply_out: where to write the result (may equal `ply_in`).
-        cylinders: the crop regions.
+        cylinders: the crop regions (cylinders or boxes).
         keep_inside: True to cut objects out; False to remove them (e.g. from the table splat).
 
     Returns:
@@ -428,33 +607,70 @@ def crop_ply(ply_in: Path, ply_out: Path, cylinders: list[CropCylinder], keep_in
     return len(kept)
 
 
+def merge_plys(ply_paths: list[Path], ply_out: Path) -> int:
+    """Concatenate 3DGS .ply files that share one frame into one splat (e.g. table + background + objects).
+
+    Args:
+        ply_paths: source splats, all in the same frame and with identical vertex fields.
+        ply_out: where to write the merged splat.
+
+    Returns:
+        Number of Gaussians written.
+
+    Raises:
+        ValueError: if `ply_paths` is empty or the files do not share the same vertex fields.
+    """
+    from plyfile import PlyData, PlyElement
+
+    if not ply_paths:
+        raise ValueError("no .ply files to merge")
+    parts = [PlyData.read(str(path))["vertex"].data for path in ply_paths]
+    if any(part.dtype != parts[0].dtype for part in parts):
+        raise ValueError("splats have different vertex fields")
+    merged = np.concatenate(parts)
+    PlyData([PlyElement.describe(merged, "vertex")]).write(str(ply_out))
+    return len(merged)
+
+
 def split_tabletop_background(
     table_ply: Path,
     background_ply: Path,
-    radius_m: float,
+    radius_m: float | None = None,
     centre_xy: tuple[float, float] = (0.0, 0.0),
     z_min_m: float = -0.02,
     z_max_m: float = 0.6,
+    box_xy: tuple[float, float, float, float] | None = None,
 ) -> tuple[int, int]:
     """Split a metric table-frame splat into tabletop (in place) and background (written aside).
 
-    The tabletop is a vertical cylinder over the table; everything outside it (walls,
-    floor, clutter beyond the table edge, and anything above `z_max_m`) is background.
+    The tabletop is a vertical cylinder (or, with `box_xy`, a box) over the table; everything
+    outside it (walls, floor, clutter beyond the table edge, and anything above `z_max_m`) is
+    background.
 
     Args:
         table_ply: splat in the z-up table frame; rewritten to hold only the tabletop.
         background_ply: where the remaining Gaussians are written.
-        radius_m: cylinder radius, in metres, around `centre_xy`.
+        radius_m: cylinder radius, in metres, around `centre_xy`; ignored when `box_xy` is given.
         centre_xy: table-frame (x, y) of the table centre, in metres.
         z_min_m: cylinder bottom; just under the table surface, so legs and floor go to background.
         z_max_m: cylinder top, above the tallest object.
+        box_xy: (x_min, x_max, y_min, y_max) of a rectangular tabletop, in metres.
 
     Returns:
         (tabletop_count, background_count) Gaussians.
+
+    Raises:
+        ValueError: if neither `radius_m` nor `box_xy` is given.
     """
-    cylinder = CropCylinder(radius_m, z_min_m, z_max_m, np.array(centre_xy, dtype=float))
-    background = crop_ply(table_ply, background_ply, [cylinder], keep_inside=False)
-    tabletop = crop_ply(table_ply, table_ply, [cylinder], keep_inside=True)
+    region: CropCylinder | CropBox
+    if box_xy is not None:
+        region = CropBox(*box_xy, z_min_m, z_max_m)
+    elif radius_m is not None:
+        region = CropCylinder(radius_m, z_min_m, z_max_m, np.array(centre_xy, dtype=float))
+    else:
+        raise ValueError("give radius_m or box_xy")
+    background = crop_ply(table_ply, background_ply, [region], keep_inside=False)
+    tabletop = crop_ply(table_ply, table_ply, [region], keep_inside=True)
     return tabletop, background
 
 
@@ -485,6 +701,10 @@ class Similarity:
     def apply(self, points: np.ndarray) -> np.ndarray:
         """Map (N, 3) points from the source to the destination frame."""
         return self.scale * points @ self.rotation.T + self.translation
+
+    def shifted(self, offset: np.ndarray) -> Similarity:
+        """Same transform followed by a translation of `offset` in the destination frame."""
+        return Similarity(self.scale, self.rotation, self.translation + np.asarray(offset, dtype=float))
 
 
 def umeyama(src: np.ndarray, dst: np.ndarray) -> Similarity:
@@ -522,6 +742,51 @@ def triangulate(projections: list[np.ndarray], pixels: list[np.ndarray]) -> np.n
         rows += [u * p[2] - p[0], v * p[2] - p[1]]
     _, _, vt = np.linalg.svd(np.array(rows))
     return vt[-1, :3] / vt[-1, 3]
+
+
+@dataclass
+class BoardVisibility:
+    """How well a ChArUco board is detected in a clip.
+
+    Attributes:
+        video: clip name.
+        frames_sampled: frames tested.
+        frames_with_markers: frames in which at least one board marker was found.
+        max_markers: most markers found in one frame.
+        max_corners: most interpolated board corners found in one frame.
+    """
+
+    video: str
+    frames_sampled: int
+    frames_with_markers: int
+    max_markers: int
+    max_corners: int
+
+
+def board_visibility(video_path: Path, board: cv2.aruco.CharucoBoard, step: int = 15) -> BoardVisibility:
+    """Detect the board in every `step`-th full-resolution frame, before spending SfM time on a clip.
+
+    Args:
+        video_path: clip to test.
+        board: board definition matching the printed or displayed board.
+        step: frame stride.
+
+    Returns:
+        Detection counts; zero markers in every frame means the board is too small, too oblique,
+        or too low in contrast, and the clip cannot give a metric scale.
+    """
+    detector = cv2.aruco.CharucoDetector(board)
+    sampled = with_markers = max_markers = max_corners = 0
+    for index, frame in enumerate(read_frames(video_path)):
+        if index % step:
+            continue
+        _, corner_ids, _, marker_ids = detector.detectBoard(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+        markers = 0 if marker_ids is None else len(marker_ids)
+        sampled += 1
+        with_markers += markers > 0
+        max_markers = max(max_markers, markers)
+        max_corners = max(max_corners, 0 if corner_ids is None else len(corner_ids))
+    return BoardVisibility(video_path.stem, sampled, with_markers, max_markers, max_corners)
 
 
 class ChArUcoAligner:
@@ -579,6 +844,23 @@ class ChArUcoAligner:
         similarity = umeyama(p_sfm, p_table)
         rms = float(np.sqrt(np.mean(np.sum((similarity.apply(p_sfm) - p_table) ** 2, axis=1))))
         return similarity, rms
+
+
+def align_charuco_table(
+    sfm: SfmResult, board: cv2.aruco.CharucoBoard, board_thickness_m: float
+) -> tuple[Similarity, float]:
+    """SfM frame -> metric table frame with the tabletop (not the board surface) at z = 0.
+
+    Args:
+        sfm: posed keyframes in which the board is visible.
+        board: board definition matching the displayed or printed board.
+        board_thickness_m: height of the board surface above the tabletop (a tablet is not flat on it).
+
+    Returns:
+        (similarity, corner RMS residual in metres).
+    """
+    similarity, rms_m = ChArUcoAligner(board).align(sfm)
+    return similarity.shifted(np.array([0.0, 0.0, board_thickness_m])), rms_m
 
 
 def transform_ply(ply_in: Path, ply_out: Path, similarity: Similarity) -> None:
@@ -677,6 +959,8 @@ class SplatTrainer:
         ssim_weight: float = 0.2,
         background_rgb: tuple[float, float, float] = (1.0, 1.0, 1.0),
         device: str = "cuda",
+        grow_grad2d: float = 2e-4,
+        reset_every: int = 3000,
     ) -> None:
         """Configure training.
 
@@ -688,7 +972,13 @@ class SplatTrainer:
             background_rgb: colour behind the Gaussians; white suits a turntable
                 against a white backdrop, since it needs no Gaussians to explain.
             device: torch device.
+            grow_grad2d: view-space gradient above which a Gaussian is split or cloned (gsplat's
+                default 2e-4); lower fills weakly textured regions such as a white plate.
+            reset_every: steps between opacity resets (gsplat's default 3000); resets hurt the
+                translucent Gaussians that draw smooth white surfaces, so a large value disables them.
         """
+        self._grow_grad2d = grow_grad2d
+        self._reset_every = reset_every
         self._iterations = iterations
         self._sh_degree = sh_degree
         self._ssim_weight = ssim_weight
@@ -736,7 +1026,12 @@ class SplatTrainer:
         scene_scale = float((camera_centres_obj - camera_centres_obj.mean(0)).norm(dim=1).max()) * 1.1
 
         params, optimizers = self._init_params(points_obj, sfm.colors, scene_scale)
-        strategy = DefaultStrategy(refine_stop_iter=int(self._iterations * 0.8), verbose=False)
+        strategy = DefaultStrategy(
+            refine_stop_iter=int(self._iterations * 0.8),
+            grow_grad2d=self._grow_grad2d,
+            reset_every=self._reset_every,
+            verbose=False,
+        )
         strategy.check_sanity(params, optimizers)
         state = strategy.initialize_state(scene_scale=scene_scale)
         means_lr_decay = 0.01 ** (1.0 / self._iterations)

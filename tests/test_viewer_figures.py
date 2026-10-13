@@ -129,3 +129,51 @@ def test_sweep_cameras_figure_subsamples_points_and_draws_cameras() -> None:
     figure = sweep_cameras_figure(_Result(**base.__dict__), every_nth_point=4)
     assert len(figure.data[0].x) == 25
     assert figure.layout.title.text == "a: 60/120 registered"
+
+
+def test_crop_figure_draws_points_one_wireframe_per_cylinder_and_the_floor() -> None:
+    from hurobo.scan import CropCylinder
+    from hurobo.scan_crop import FloorPlane
+    from hurobo.utils.viewer import crop_figure
+
+    points = np.random.default_rng(0).uniform(-3, 3, size=(500, 3))
+    cylinders = {
+        "old": CropCylinder(5.0, -1.0, 3.0, np.zeros(2)),
+        "new": CropCylinder(1.5, 0.0, 2.0, np.array([0.3, 0.1])),
+    }
+    floor = FloorPlane(np.array([0.0, 0.0, 1.0]), np.zeros(3), 0.5, 0.02)
+    figure = crop_figure(points, np.full((500, 3), 0.5), cylinders, floor)
+    names = [trace.name for trace in figure.data]
+    assert names == ["sparse points", "old", "new", "floor (RANSAC)"]
+    assert figure.layout.scene.aspectmode == "data"
+
+
+def test_plot_image_grid_has_one_axis_per_cell() -> None:
+    from hurobo.utils.plotting import plot_image_grid
+
+    image = np.zeros((20, 30, 3), np.uint8)
+    figure = plot_image_grid({"a": [image, image, image], "b": [image, image, image]}, ["0", "90", "180"])
+    assert len(figure.axes) == 6
+
+
+def test_splat_viewer_page_is_filled_in(tmp_path) -> None:
+    import numpy as np
+    from plyfile import PlyData, PlyElement
+
+    from hurobo.utils.viewer import write_splat_viewer
+
+    names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2"]
+    names += [f"rot_{i}" for i in range(4)]
+    vertices = np.zeros(50, dtype=[(n, "f4") for n in names])
+    vertices["opacity"] = 2.0
+    vertices["rot_0"] = 1.0
+    vertices["x"] = np.linspace(0, 1, 50)
+    ply = tmp_path / "scene.ply"
+    PlyData([PlyElement.describe(vertices, "vertex")]).write(str(ply))
+
+    page = write_splat_viewer(ply, tmp_path / "viewer", title="demo")
+
+    html = page.read_text()
+    assert "__TITLE__" not in html and "__PLY_NAME__" not in html
+    assert 'PLY_URL = "scene.ply"' in html
+    assert (tmp_path / "viewer" / "scene.ply").exists()
