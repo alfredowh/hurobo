@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+
+if TYPE_CHECKING:
+    from hurobo.capture_plan import CapturePlanner, PlannedClip
+    from hurobo.real_setup import RealSetup
 
 
 def plot_3d_trajectory(
@@ -172,6 +177,42 @@ def plot_image_row(
     return fig
 
 
+def plot_image_grid(
+    rows: dict[str, list[np.ndarray]],
+    column_titles: list[str] | None = None,
+    cell_in: float = 2.0,
+) -> Figure:
+    """Rows of equally many images, each row labelled; e.g. one render per method across several views.
+
+    Args:
+        rows: row label -> list of RGB images (same length for every row).
+        column_titles: title above each column, e.g. the azimuth of the view.
+        cell_in: height of one image cell in inches; the width follows the first image's aspect.
+
+    Returns:
+        The figure (not saved or shown).
+    """
+    first = next(iter(rows.values()))[0]
+    aspect = first.shape[1] / first.shape[0]
+    columns = len(next(iter(rows.values())))
+    fig, axes = plt.subplots(
+        len(rows), columns, figsize=(cell_in * aspect * columns + 1.2, cell_in * len(rows)), squeeze=False
+    )
+    for r, (label, images) in enumerate(rows.items()):
+        for c, image in enumerate(images):
+            ax = axes[r][c]
+            ax.imshow(image)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if c == 0:
+                ax.set_ylabel(label, fontsize=8, rotation=90, labelpad=6)
+            if r == 0 and column_titles:
+                ax.set_title(column_titles[c], fontsize=9)
+    fig.tight_layout()
+    plt.close(fig)
+    return fig
+
+
 def plot_episode_overview(
     image_rgb: np.ndarray,
     state: np.ndarray,
@@ -229,3 +270,74 @@ def plot_push_traces(traces: dict[str, dict[str, np.ndarray]], output_path: Path
     fig.tight_layout()
     fig.savefig(output_path, dpi=130)
     plt.close(fig)
+
+
+def plot_clip_sheet(
+    setup: RealSetup,
+    work_rect_table: tuple[float, float, float, float],
+    clips: list[PlannedClip],
+    planner: CapturePlanner,
+    columns: int = 5,
+) -> Figure:
+    """One small top view of the table per planned clip, to print and keep next to the table.
+
+    Each panel shows the table, the board, the work area, where the bowl (blue) and plate (red) go, the
+    hand's start (orange diamond) and an arrow from the bowl to the side of the rim to pinch.
+
+    Args:
+        setup: measured table, board and objects.
+        work_rect_table: (x_min, x_max, y_min, y_max) of the work area, table frame.
+        clips: the planned clips.
+        planner: used to turn a hand-start name into a table-frame position.
+        columns: panels per row.
+
+    Returns:
+        The figure (not saved).
+    """
+    rows = int(np.ceil(len(clips) / columns))
+    figure, axes = plt.subplots(rows, columns, figsize=(3.4 * columns, 2.3 * rows + 0.4), squeeze=False)
+    table, board = setup.table, setup.board
+    x0, x1, y0, y1 = work_rect_table
+    for axis in axes.ravel():
+        axis.axis("off")
+    for axis, clip in zip(axes.ravel(), clips, strict=False):
+        axis.axis("on")
+        axis.set_aspect("equal")
+        axis.add_patch(
+            plt.Rectangle(
+                (table.left_edge_x_m, table.near_edge_y_m),
+                table.width_m,
+                table.depth_m,
+                fill=True,
+                facecolor="#eadfcb",
+                edgecolor="#8c6d46",
+            )
+        )
+        axis.add_patch(plt.Rectangle((0, -board.height_m), board.width_m, board.height_m, color="#333"))
+        axis.add_patch(
+            plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor="#2a9d8f", linestyle="--")
+        )
+        axis.add_patch(plt.Circle(clip.plate_xy_table, setup.plate.radius_m, color="#dc3c3c", alpha=0.35))
+        axis.add_patch(plt.Circle(clip.bowl_xy_table, setup.bowl.radius_m, color="#285ac8", alpha=0.6))
+        start = planner.hand_start_table(clip.hand_start)
+        axis.plot(*start[:2], "D", color="#e9a000", markersize=7)
+        side = -1.0 if clip.grasp_side == "left" else 1.0
+        axis.annotate(
+            "",
+            xy=clip.bowl_xy_table + np.array([side * setup.bowl.radius_m, 0.0]),
+            xytext=clip.bowl_xy_table,
+            arrowprops={"arrowstyle": "->", "color": "white", "lw": 1.5},
+        )
+        left, near = clip.from_table_edges_m(clip.bowl_xy_table, setup)
+        axis.set_title(
+            f"clip {clip.index:03d}: hand {clip.hand_start.name}\npinch {clip.grasp_side} rim; bowl "
+            f"{left * 100:.0f} cm from left, {near * 100:.0f} from you",
+            fontsize=7,
+        )
+        axis.set_xlim(table.left_edge_x_m - 0.05, table.right_edge_x_m + 0.05)
+        axis.set_ylim(table.near_edge_y_m - 0.05, table.far_edge_y_m + 0.05)
+        axis.set_xticks([])
+        axis.set_yticks([])
+    figure.suptitle("Recording plan: blue bowl, red plate, orange hand start, board in black", fontsize=10)
+    figure.tight_layout()
+    return figure

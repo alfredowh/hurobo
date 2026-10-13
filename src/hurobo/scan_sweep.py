@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import cv2
@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 
 from hurobo.scan import (
+    CropCylinder,
     KeyframeSampler,
     SfmOptions,
     SfmReconstructor,
@@ -27,6 +28,7 @@ from hurobo.scan import (
     preview_grid,
     sfm_result_from_model,
 )
+from hurobo.scan_crop import ObjectSplat, choose_object_crop, extract_object_splat, locate_white_object
 
 
 @dataclass(frozen=True)
@@ -38,12 +40,16 @@ class ScanConfig:
         sfm: COLMAP settings.
         num_frames: keyframes sampled from the clip (spacing = duration / num_frames).
         iterations: splat optimisation steps.
+        grow_grad2d: densification gradient threshold (see `SplatTrainer`).
+        reset_every: opacity-reset interval in steps (see `SplatTrainer`).
     """
 
     name: str
     sfm: SfmOptions = field(default_factory=SfmOptions)
     num_frames: int = 120
     iterations: int = 7000
+    grow_grad2d: float = 2e-4
+    reset_every: int = 3000
 
 
 @dataclass
@@ -79,9 +85,19 @@ class SweepResult:
     ply_path: Path
     preview_path: Path
 
-    def load_sfm(self) -> SfmResult:
-        """The config's largest COLMAP model as poses and points (no pixels), in its SfM frame."""
-        return sfm_result_from_model(largest_model(load_sparse_models(self.sparse_dir)))
+    def load_sfm(self, with_pixels: bool = False) -> SfmResult:
+        """The config's largest COLMAP model in its SfM frame.
+
+        Args:
+            with_pixels: also load the keyframe images (needed to triangulate from image
+                content); otherwise only poses and points, which is fast.
+        """
+        model = largest_model(load_sparse_models(self.sparse_dir))
+        if not with_pixels:
+            return sfm_result_from_model(model)
+        # sparse_dir is <sweep>/_sfm/<key>/sparse; the keyframes live in <sweep>/_frames/<N>f.
+        images_dir = self.sparse_dir.parents[2] / "_frames" / f"{self.config.num_frames}f"
+        return sfm_result_from_model(model, images_dir)
 
 
 def default_bowl_sweep() -> list[ScanConfig]:
@@ -102,6 +118,49 @@ def default_bowl_sweep() -> list[ScanConfig]:
         ScanConfig("sparse_keyframes_40", robust, num_frames=40),
         ScanConfig("train_30k", robust, iterations=30000),
     ]
+
+
+def default_clip_sweep() -> list[ScanConfig]:
+    """Configs for one clip of a new object: COLMAP's defaults, then the robust settings varied.
+
+    Returns:
+        defaults; robust SIFT with sequential matching; robust + exhaustive matching at 120 frames,
+        and at 60 frames (the budget the multi-clip scans use per clip).
+    """
+    robust = SfmOptions.robust()
+    exhaustive = SfmOptions.robust_exhaustive()
+    return [
+        ScanConfig("colmap_defaults"),
+        ScanConfig("robust_sequential", robust),
+        ScanConfig("robust_exhaustive", exhaustive),
+        ScanConfig("robust_exhaustive_60f", exhaustive, num_frames=60),
+    ]
+
+
+def plate_fill_sweep() -> list[ScanConfig]:
+    """Training settings aimed at filling the weakly textured plate: robust SfM, one change at a time.
+
+    Returns:
+        longer training; lower densification threshold; opacity resets off; all three together.
+    """
+    exhaustive = SfmOptions.robust_exhaustive()
+    return [
+        ScanConfig("train_30k", exhaustive, iterations=30000),
+        ScanConfig("grad1e-4", exhaustive, grow_grad2d=1e-4),
+        ScanConfig("no_reset", exhaustive, reset_every=10**9),
+        ScanConfig("fill_all", exhaustive, iterations=30000, grow_grad2d=1e-4, reset_every=10**9),
+    ]
+
+
+def combined_clip_sweep(num_clips: int, frames_per_clip: int = 60) -> list[ScanConfig]:
+    """The config for several clips scanned together: exhaustive matching, since sequential links
+    across clips are meaningless, at the same keyframes-per-clip budget as `robust_exhaustive_60f`.
+
+    Args:
+        num_clips: how many clips go into the one reconstruction.
+        frames_per_clip: keyframe budget per clip; the total grows with the clip count.
+    """
+    return [ScanConfig("combined", SfmOptions.robust_exhaustive(), num_frames=frames_per_clip * num_clips)]
 
 
 def video_duration_s(video_path: Path) -> float:
@@ -152,16 +211,16 @@ class ScanSweep:
     under `out_dir/_sfm/` and shared between configs that differ only in training.
     """
 
-    def __init__(self, video_path: Path, out_dir: Path, holdout_every: int = 10) -> None:
+    def __init__(self, video_path: Path | list[Path], out_dir: Path, holdout_every: int = 10) -> None:
         """Args:
-        video_path: the orbit clip.
+        video_path: the orbit clip, or several clips of one scene to reconstruct together.
         out_dir: sweep root, created if missing.
         holdout_every: withhold every N-th keyframe to score each splat on unseen views.
         """
-        self._video = video_path
+        self._videos = [video_path] if isinstance(video_path, Path) else list(video_path)
         self._out = out_dir
         self._holdout_every = holdout_every
-        self._duration_s = video_duration_s(video_path)
+        self._duration_s = sum(video_duration_s(path) for path in self._videos)
 
     def run(self, configs: list[ScanConfig]) -> list[SweepResult]:
         """Run every config in order and write `result.json` per config, adding them to `sweep.json`.
@@ -190,7 +249,12 @@ class ScanSweep:
         sfm, summary, sfm_seconds, sparse_dir = self._sfm(config)
         images_rgb = [im.image_rgb for im in sfm.images]
         torch.manual_seed(0)  # unseeded quaternion init would otherwise blur config-to-config differences
-        trainer = SplatTrainer(iterations=config.iterations, background_rgb=border_colour(images_rgb))
+        trainer = SplatTrainer(
+            iterations=config.iterations,
+            background_rgb=border_colour(images_rgb),
+            grow_grad2d=config.grow_grad2d,
+            reset_every=config.reset_every,
+        )
         config_dir = self._out / config.name
         config_dir.mkdir(parents=True, exist_ok=True)
         ply_path = config_dir / "splat.ply"
@@ -230,7 +294,7 @@ class ScanSweep:
         meta_path = work / "summary.json"
         images_dir = self._out / "_frames" / f"{config.num_frames}f"
         if not images_dir.exists():
-            KeyframeSampler(num_frames=config.num_frames).sample(self._video, images_dir)
+            KeyframeSampler(num_frames=config.num_frames).sample_many(self._videos, images_dir)
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
             summary, seconds = SfmSummary(**meta["summary"]), meta["seconds"]
@@ -243,6 +307,112 @@ class ScanSweep:
         (work / "database.db").unlink(missing_ok=True)  # the match tables are large and not needed again
         meta_path.write_text(json.dumps({"summary": asdict(reconstructor.last_summary), "seconds": seconds}))
         return sfm, reconstructor.last_summary, seconds, work / "sparse"
+
+
+def load_labelled(sweeps: dict[str, Path]) -> list[SweepResult]:
+    """Results of several sweep folders in one list, each config renamed `<label>/<config>`.
+
+    Args:
+        sweeps: label (e.g. the clip name) -> sweep folder written by `ScanSweep.run`.
+    """
+    return [
+        replace(result, config=replace(result.config, name=f"{label}/{result.config.name}"))
+        for label, folder in sweeps.items()
+        for result in ScanSweep.load(folder)
+    ]
+
+
+def extract_result_object(
+    result: SweepResult,
+    ply_out: Path,
+    crop: CropCylinder | None = None,
+    height_sigmas: float = 3.0,
+) -> ObjectSplat:
+    """The object alone (floor removed, upright, base at z = 0) from one sweep result's uncropped splat.
+
+    Uses the pipeline's own crop choice (`choose_object_crop`) on the result's SfM points.
+
+    Args:
+        result: a stored sweep result.
+        ply_out: where to write the object splat.
+        crop: explicit crop cylinder in the object frame; the floor is still fitted automatically.
+        height_sigmas: floor-scatter multiples to cut at; lower it for a thin object such as a plate.
+
+    Raises:
+        ValueError: if no floor plane was found or nothing stands above it.
+    """
+    sfm = result.load_sfm()
+    in_object_frame = sfm.in_frame(object_frame_from_orbit(sfm))
+    choice = choose_object_crop(
+        in_object_frame.points_world, in_object_frame.camera_centres_world, explicit=crop
+    )
+    if choice.floor is None:
+        raise ValueError("no floor plane found, cannot cut the object off it")
+    ply_out.parent.mkdir(parents=True, exist_ok=True)
+    return extract_object_splat(
+        result.ply_path, ply_out, choice.floor, choice.cylinder, height_sigmas=height_sigmas
+    )
+
+
+def extract_result_objects(
+    results: list[SweepResult], out_dir: Path, min_registered_fraction: float = 0.8
+) -> tuple[dict[str, Path], dict[str, str]]:
+    """`extract_result_object` for every result that registered enough, with failures reported, not raised.
+
+    Args:
+        results: from `load_labelled` or `ScanSweep.load`.
+        out_dir: object splats go to `<out_dir>/<config name>.ply`.
+        min_registered_fraction: results below this registered share are skipped (a fragment of an
+            orbit is not an object scan).
+
+    Returns:
+        (config name -> object splat path, config name -> why it was skipped or failed).
+    """
+    objects: dict[str, Path] = {}
+    skipped: dict[str, str] = {}
+    for result in results:
+        name = result.config.name
+        fraction = result.sfm_summary.registered_fraction
+        if fraction < min_registered_fraction:
+            skipped[name] = f"only {100 * fraction:.0f} % of keyframes registered"
+            continue
+        ply_out = out_dir / (name.replace("/", "__") + ".ply")
+        try:
+            extract_result_object(result, ply_out)
+        except ValueError as error:
+            skipped[name] = str(error)
+            continue
+        objects[name] = ply_out
+    return objects, skipped
+
+
+def white_object_residuals(results: list[SweepResult]) -> pd.DataFrame:
+    """How consistently each reconstruction places the one white object across its keyframes.
+
+    Triangulates the white pixels (`locate_white_object`); a small mean ray distance means the
+    rays from all views meet, i.e. the cameras are mutually consistent around the object. It
+    is an independent check on SfM that does not rely on the splat. Needs a white object that is
+    the only white thing in view, so it is meaningful for the bowl clips, not the plate.
+
+    Args:
+        results: stored sweep results; each loads its keyframes, so pass the ones you care about.
+
+    Returns:
+        One row per result: object radius, mean ray distance (both SfM units) and views used.
+    """
+    rows = []
+    for result in results:
+        sfm = result.load_sfm(with_pixels=True)
+        reference = locate_white_object(sfm.in_frame(object_frame_from_orbit(sfm)))
+        rows.append(
+            {
+                "config": result.config.name,
+                "white-object radius": round(reference.radius, 2),
+                "mean ray distance": round(reference.mean_ray_distance, 2),
+                "views used": f"{reference.num_views}/{len(sfm.images)}",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _result_to_json(result: SweepResult) -> dict:
@@ -267,6 +437,8 @@ def _result_from_json(out_dir: Path, name: str) -> SweepResult:
             sfm=SfmOptions(**config["sfm"]),
             num_frames=config["num_frames"],
             iterations=config["iterations"],
+            grow_grad2d=config.get("grow_grad2d", 2e-4),
+            reset_every=config.get("reset_every", 3000),
         ),
         sfm_summary=SfmSummary(**data["sfm_summary"]),
         orbit_coverage_deg=coverage,

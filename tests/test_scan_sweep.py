@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
+
+import cv2
 import numpy as np
+import pytest
 import torch
 
 from hurobo.scan import (
+    KeyframeSampler,
     PosedImage,
     SfmOptions,
+    SfmReconstructor,
     SfmResult,
     SfmSummary,
     SplatTrainer,
@@ -23,7 +29,9 @@ from hurobo.scan_sweep import (
     SweepResult,
     _result_from_json,
     _result_to_json,
+    combined_clip_sweep,
     default_bowl_sweep,
+    default_clip_sweep,
     sweep_table,
 )
 
@@ -146,3 +154,110 @@ def test_orbit_coverage_reads_a_full_loop_as_about_360():
 def test_orbit_coverage_reads_a_half_arc_as_about_180():
     coverage = orbit_coverage_deg(_orbit_sfm(np.arange(0, 181, 5.0)))
     assert 170 <= coverage <= 190
+
+
+def _write_video(path, amplitudes, size=(64, 48)):
+    """AVI whose frame i carries a high-frequency pattern of the given amplitude and a block coding i."""
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, size)
+    rng = np.random.default_rng(0)
+    for i, amplitude in enumerate(amplitudes):
+        frame = np.full((size[1], size[0], 3), 128, np.uint8)
+        noise = (rng.normal(size=(size[1], size[0])) * amplitude).astype(np.int16)
+        frame = np.clip(frame + noise[..., None], 0, 255).astype(np.uint8)
+        frame[:8, :8] = 10 * i + 5  # which frame this is
+        writer.write(frame)
+    writer.release()
+
+
+def test_keyframe_sampler_streams_and_keeps_the_sharpest_frame_per_bin(tmp_path):
+    # 12 frames, 4 bins of 3: the sharpest (largest amplitude) in each bin is frame 1, 4, 8, 9.
+    amplitudes = [5, 40, 10, 5, 30, 10, 5, 10, 40, 60, 10, 5]
+    _write_video(tmp_path / "clip.avi", amplitudes)
+    paths = KeyframeSampler(num_frames=4, max_side_px=64).sample(tmp_path / "clip.avi", tmp_path / "frames")
+    assert [p.name for p in paths] == [f"frame_{i:04d}.png" for i in range(4)]
+    chosen = [int(round((cv2.imread(str(p))[:8, :8].mean() - 5) / 10)) for p in paths]
+    assert chosen == [1, 4, 8, 9]
+
+
+def test_sample_many_splits_the_budget_by_clip_length_and_numbers_frames_continuously(tmp_path):
+    _write_video(tmp_path / "short.avi", [10] * 6)
+    _write_video(tmp_path / "long.avi", [200] * 12)
+    paths = KeyframeSampler(num_frames=6, max_side_px=64).sample_many(
+        [tmp_path / "short.avi", tmp_path / "long.avi"], tmp_path / "frames"
+    )
+    assert [p.name for p in paths] == [f"frame_{i:04d}.png" for i in range(6)]
+    texture = [cv2.imread(str(p))[16:, 16:].std() for p in paths]  # the long clip is much noisier
+    assert [t < 30 for t in texture] == [True, True, False, False, False, False]
+    assert not (tmp_path / "frames_part").exists()
+
+
+class _FakeReconstructor(SfmReconstructor):
+    """SfmReconstructor whose COLMAP runs are replaced by canned registration counts."""
+
+    def __init__(self, registered_by_matching: dict[str, int], **kwargs):
+        super().__init__(**kwargs)
+        self._registered = registered_by_matching
+        self.calls: list[str] = []
+
+    def _run_once(self, image_dir, work_dir, options):
+        self.calls.append(options.matching)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "marker.txt").write_text(options.matching)
+        summary = SfmSummary(120, self._registered[options.matching], 1, 1000, 1.0)
+        return SfmResult([], np.zeros((0, 3)), np.zeros((0, 3))), summary
+
+
+def test_reconstructor_retries_with_the_fallback_and_keeps_the_better_run(tmp_path):
+    reconstructor = _FakeReconstructor(
+        {"sequential": 60, "exhaustive": 120},
+        options=SfmOptions(),
+        fallback=SfmOptions(matching="exhaustive"),
+    )
+    reconstructor.run(tmp_path / "images", tmp_path / "work")
+    assert reconstructor.calls == ["sequential", "exhaustive"]
+    assert reconstructor.last_summary.num_registered == 120
+    assert (tmp_path / "work" / "marker.txt").read_text() == "exhaustive"  # the better run is the one on disk
+    assert not (tmp_path / "work_fallback").exists()
+
+
+def test_reconstructor_keeps_the_first_run_when_the_fallback_is_worse(tmp_path):
+    reconstructor = _FakeReconstructor(
+        {"sequential": 90, "exhaustive": 50},
+        options=SfmOptions(),
+        fallback=SfmOptions(matching="exhaustive"),
+        min_registered_fraction=0.95,
+    )
+    with pytest.warns(UserWarning, match="90/120"):
+        reconstructor.run(tmp_path / "images", tmp_path / "work")
+    assert reconstructor.last_summary.num_registered == 90
+    assert (tmp_path / "work" / "marker.txt").read_text() == "sequential"
+
+
+def test_reconstructor_does_not_retry_or_warn_when_enough_registered(tmp_path):
+    reconstructor = _FakeReconstructor(
+        {"sequential": 110}, options=SfmOptions(), fallback=SfmOptions(matching="exhaustive")
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        reconstructor.run(tmp_path / "images", tmp_path / "work")
+    assert reconstructor.calls == ["sequential"]
+
+
+def test_robust_presets_lower_the_threshold_and_fallback_is_exhaustive():
+    assert SfmOptions.robust().peak_threshold == 0.002
+    assert SfmOptions.robust().matching == "sequential"
+    assert SfmOptions.robust_exhaustive().matching == "exhaustive"
+    assert SfmOptions() == SfmOptions(
+        None, None, "sequential", 15, None
+    )  # plain SfmOptions stays COLMAP's defaults
+
+
+def test_combined_clip_sweep_scales_frames_with_clip_count_and_matches_exhaustively():
+    (config,) = combined_clip_sweep(3, frames_per_clip=50)
+    assert config.num_frames == 150
+    assert config.sfm.matching == "exhaustive"
+
+
+def test_clip_sweep_names_are_unique_and_include_colmap_defaults():
+    names = [c.name for c in default_clip_sweep()]
+    assert len(set(names)) == len(names) and "colmap_defaults" in names

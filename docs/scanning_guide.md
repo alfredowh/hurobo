@@ -14,9 +14,12 @@ You end up with three kinds of splat:
 All three come from the **same** video and the **same** ChArUco board, so they share one frame and drop into the
 sim without extra alignment.
 
-> Status: `--charuco` has been verified on synthetic board views and the single-object mode on a stock turntable
-> clip (see `PLAN.md` §5). The `--charuco` path has **not** been run end to end on a real phone video yet, so
-> read the printed ChArUco RMS (step 5) before trusting the scale.
+> Status: `--charuco` has now run end to end on two real phone clips with the board shown on a tablet (corner RMS
+> 0.5 to 1.1 mm, design log D-009), but only over part of the table. Read the printed ChArUco RMS (step 5) before
+> trusting the scale. The single-object
+> mode has run on a stock turntable clip and on two real phone clips of a bowl on a wooden floor. Those clips
+> are where the capture advice below comes from: see [design_decisions.md](design_decisions.md) (D-001, D-004)
+> and `examples/08_scan_parameter_sweep.ipynb`.
 
 ---
 
@@ -31,6 +34,16 @@ sim without extra alignment.
 - Objects with texture. Plain white/black/glossy objects reconstruct badly; put a patterned cloth, newspaper or
   printed sheet under a plain object.
 - Optional: a lazy-Susan/turntable for the single-object scan.
+
+### Board on a tablet instead of paper
+Possible, but the first attempt failed: in four of six clips not a single marker was detected. What differed in the two
+clips that worked: the board filled a few hundred pixels (close, nearly top-down), and it was readable.
+- Set the tablet to a **white** background with the colour/night filter off (it showed white squares as cyan), medium to high
+  brightness, no reflection of lamps or windows in the screen.
+- Keep the board **large in the frame** (film from 30 to 50 cm) and not seen at a grazing angle in most frames.
+- Measure one square and one marker **on the screen** with a ruler, never zoom afterwards, pass them as
+  `--square-length` and `--marker-length`, and pass the tablet's thickness as `--board-thickness`.
+- Test a clip before scanning it: `hurobo.scan.board_visibility` (example in `examples/08_scan_parameter_sweep.ipynb`, part 4).
 
 ### Software check (once)
 ```bash
@@ -77,23 +90,33 @@ Print it with "actual size / 100 %", no "fit to page".
 
 ## 2. Record the table scan (tabletop + objects + background in one video)
 
-This is the main capture. 2 to 3 minutes.
+This is the main capture. **One lap per clip, about 30 to 40 s.** The pipeline picks 120 keyframes from the
+clip; at 30 to 40 s that is one keyframe every 0.25 to 0.35 s. On the bowl clips, keyframes 0.19 s apart
+reconstructed fully and held-out PSNR fell by about 10 dB at 0.58 s apart. A 2 to 3 minute clip would give one
+keyframe per 1 to 1.5 s with the default `--frames 120`.
 
 1. Start recording with the board and all objects in view.
 2. **Orbit slowly** (a full 360 deg circle) around the table at about 40 to 60 cm radius from the table edge,
    keeping the phone at **about 30 to 45 deg downward** so the table fills the lower two thirds of the frame and
    the room (walls, floor, furniture) is visible in the upper third. That upper third is your background.
-3. Do a **second lap higher** (phone 60 to 80 cm above the table, looking more steeply down) and, if you can, a
-   third lap low (just above the table, looking across it) so object sides and rims are seen.
+3. For more coverage, film a **second lap higher** (phone 60 to 80 cm above the table, looking more steeply
+   down) and a third low (just above the table, looking across it). Separate clips are the safer choice: the one
+   clip that mixed three elevations registered only 70 of 120 frames with sequential matching (the single lap
+   registered all 120) and needed the exhaustive retry. It did still reconstruct (27.8 dB held-out against 31.9 dB
+   for the single lap), so this is a preference, not a rule; the two clips differ in more than the elevations.
 4. Keep moving smoothly, about 1 full orbit per 40 to 60 s. Never rotate on the spot: you need to **translate**
    so the views triangulate.
 5. The board must be visible in a good share of the frames (at least 3 views per corner are needed; aim for
    most of the video).
-6. Do not move objects, do not let your hands or shadow into the scene, close the door/curtains so the light does
-   not change.
+6. Do not move objects, do not let your hands or **your shadow** into the scene, close the door/curtains so the
+   light does not change. A moving shadow crosses the floor in many frames of the 3-angle bowl clip; whether it
+   explains that clip's lower PSNR was not tested.
+7. Keep the distance to the objects roughly constant (the camera height above the floor varied 1.8x in the
+   3-angle clip and 1.15x in the single lap). Not isolated as a cause either.
 
-What the pipeline does with it: 120 sharpest frames are picked, COLMAP registers the cameras, 3DGS is trained
-(about 7000 iterations), then the board fixes metric scale and the table frame.
+What the pipeline does with it: 120 sharpest frames are picked, COLMAP registers the cameras (lowered SIFT
+threshold; exhaustive matching as a retry when under 80 % register), 3DGS is trained (about 7000 iterations),
+then the board fixes metric scale and the table frame.
 
 ---
 
@@ -117,9 +140,11 @@ A pure turn of the phone on the spot gives no baseline and SfM fails; walk a lit
 Use this when an object needs more detail than the table scan gives (bowl interior, underside).
 
 1. Put the object on a **textured** surface at the centre of a turntable or table. A plain white backdrop works,
-   but give the object texture.
-2. Film one slow 360 deg orbit at about 40 deg elevation, 40 s, then one lower and one higher lap if you can.
-   The object must stay at roughly the same size in the frame.
+   but give the object texture. A smooth white object on a low-contrast floor is the hard case: it has almost no
+   features of its own, and a patterned cloth or newspaper beside it helps SfM more than anything else.
+2. Film one slow 360 deg orbit at 40 to 55 deg elevation, 25 to 40 s, at a constant distance so the object keeps
+   the same size in the frame. Film other elevations as separate clips. Keep your shadow off the surface.
+   A smooth path is not needed; even coverage is.
 3. Single-object mode returns an **arbitrary scale** (it uses no board), so you attach it with
    `MATCH_BODY_XY`. Metric objects come from the table scan instead.
 
@@ -165,9 +190,27 @@ uv run python scripts/09_scan_object.py data/raw/room_sweep.mp4 --name real_room
 
 ### 5c. Optional single object alone
 ```bash
-uv run python scripts/09_scan_object.py data/raw/bowl_alone.mp4 --name bowl_alone
+uv run python scripts/09_scan_object.py data/raw/bowl_alone.mp4 --name bowl_alone --holdout-every 10
 ```
-Writes `data/splats/bowl_alone.ply` (no board, arbitrary scale, cropped to the object).
+Writes (no board, arbitrary scale):
+```
+bowl_alone_full.ply     everything the splat contains, uncropped
+bowl_alone.ply          cropped to the object (floor included)
+bowl_alone_object.ply   the object alone: floor removed, upright, base at z = 0 (needs a fitted floor)
+```
+Attach `bowl_alone_object.ply` with `SplatFit.MATCH_BODY_XY` (its scale is arbitrary), e.g.
+`build_assets(bowl_ply=Path("data/splats/bowl_alone_object.ply"))` in `examples/03_splat_composite.ipynb`.
+and prints how the crop was chosen. In order: `--crop X Y R` if you gave it; the floor-plane + cluster estimate
+(an object standing on a floor or table); otherwise the old percentile fit, which assumes the SfM points sit on
+the object (a turntable on a plain backdrop). `--holdout-every 10` withholds every 10th keyframe from training
+and reports PSNR on them, which is the number to trust; the training-view PSNR is optimistic.
+
+To change only the crop, without re-running SfM or training:
+```bash
+uv run python scripts/09_scan_object.py data/raw/bowl_alone.mp4 --name bowl_alone --recrop --crop 0.1 0.5 2.7
+```
+Units are the splat's own (SfM) units; pick the centre and radius with `crop_figure` in
+`examples/08_scan_parameter_sweep.ipynb`.
 
 ### 5d. Optional collision shape for an object
 ```bash
@@ -180,10 +223,13 @@ uv run python scripts/10_build_collider.py --ply data/splats/real_bowl.ply --nam
 
 1. **Read the console.** Expect:
    ```
-   [SfM] registered 118/120 images
+   [SfM] registered 118/120 images in 1 model(s)
    [scan] ChArUco alignment: scale 0.xxxx m/unit, corner RMS 2.1 mm
    ```
-   - Registered fewer than ~80 % of the images: orbit too fast, blurry, or too little texture. Re-film.
+   - `only N/120 registered; retrying with exhaustive matching` is the automatic fallback. It is slower
+     (about 6 min for 120 images) but it is what made a harder clip register fully.
+   - A warning that SfM registered under 80 % of the keyframes: orbit too fast, blurry, or too little texture.
+     Re-film. More than one model means COLMAP split the orbit.
    - Corner RMS above ~5 mm: the board was curled, mis-measured, or seen in too few views. Re-film or re-print.
 2. **Open the preview** `data/scans/real/preview_photo_vs_splat.png`. Splat should resemble the photo; fuzzy
    floaters near the camera tracks are normal, large holes are not.
@@ -195,7 +241,10 @@ uv run python scripts/10_build_collider.py --ply data/splats/real_bowl.ply --nam
    ```
    and check the objects land on the sim's table at the right size.
 
-The PSNR printed at the end is measured on the training views, so it is optimistic. Report it as such.
+The PSNR printed at the end is measured on the training views unless you passed `--holdout-every`, so it is
+optimistic. PSNR is also only measured on frames that registered: a reconstruction that covers a short arc can
+score well. Look at the registered fraction and how much of the orbit is covered
+(`examples/08_scan_parameter_sweep.ipynb`) before the PSNR.
 
 ---
 
@@ -204,6 +253,8 @@ The PSNR printed at the end is measured on the training views, so it is optimist
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `SfM registered no images` | too fast, blurry, textureless | slower orbit, more light, add texture under objects |
+| warning: registered under 80 % of the keyframes | too few features or weak overlap between frames | shorter clip (keyframes 0.2 to 0.3 s apart), slower lap, texture beside the object; see design log D-001 |
+| single-object crop is a wide floor disc with a tiny object | no floor plane found (fell back to the percentile fit), or the cluster is wrong | `--recrop --crop X Y R` with values from `crop_figure` |
 | `only N ChArUco corners seen` | board out of view / too small / blurry | keep the board larger in frame, film closer, more light |
 | Table not flat in the viewer | the printed board is warped | glue the board to something rigid |
 | Wrong size in the sim | printed board not 35 mm squares | re-print at 100 %, measure a square |

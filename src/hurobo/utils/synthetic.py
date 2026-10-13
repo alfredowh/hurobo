@@ -10,7 +10,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from hurobo.camera import CameraIntrinsics
-from hurobo.demo import HumanDemo
+from hurobo.demo import GraspSegmenter, HumanDemo
 from hurobo.extract import ClipReport, extract_demo
 from hurobo.markers import MarkerLayout
 from hurobo.utils.transforms import invert_transform, look_at_origin_pose, make_transform
@@ -187,3 +187,90 @@ def synthetic_aperture_trace(
     t = np.arange(0.0, duration_s, 1.0 / rate_hz)
     noise = 0.004 * np.random.default_rng(seed).standard_normal(t.size)
     return t, 0.07 - 0.055 * ((t > 1.5) & (t < 4.2)) + noise
+
+
+def _min_jerk(fraction: np.ndarray) -> np.ndarray:
+    """Minimum-jerk easing, 0 -> 1, with zero speed at both ends."""
+    return 10 * fraction**3 - 15 * fraction**4 + 6 * fraction**5
+
+
+def synthetic_pick_place_demo(
+    bowl_xy_table: np.ndarray,
+    plate_xy_table: np.ndarray,
+    start_xyz_table: np.ndarray,
+    grasp_angle_rad: float = -np.pi / 2,
+    rim_radius_m: float = 0.069,
+    rim_height_m: float = 0.055,
+    plate_height_m: float = 0.028,
+    rate_hz: float = 20.0,
+    seed: int = 0,
+) -> HumanDemo:
+    """A made-up human pick-and-place in the table frame: reach, pinch the bowl rim, carry, release, retreat.
+
+    Stand-in data for tests and notebooks until real clips exist. The hand starts at `start_xyz_table`
+    (anywhere), pinches the rim of the bowl at `grasp_angle_rad` around its centre, carries it so that the
+    bowl centre ends over the plate centre, opens, and rises. Small seeded wobble and a few millimetres of
+    placement error are added so it is not a perfect path.
+
+    Args:
+        bowl_xy_table: shape (2,), bowl centre.
+        plate_xy_table: shape (2,), plate centre.
+        start_xyz_table: shape (3,), where the hand is at t = 0.
+        grasp_angle_rad: direction from the bowl centre to the pinch point, in the table xy plane
+            (-pi/2 is the rim nearest the person).
+        rim_radius_m: bowl radius at the rim.
+        rim_height_m: pinch height above the table.
+        plate_height_m: plate rim height; the bowl is released this far above the table plus the bowl base.
+        rate_hz: sample rate.
+        seed: for the wobble.
+
+    Returns:
+        A `HumanDemo` with grasp and release found; the marker poses are the object centres (no rotation).
+    """
+    rng = np.random.default_rng(seed)
+    bowl_xy, plate_xy = np.asarray(bowl_xy_table, float), np.asarray(plate_xy_table, float)
+    rim_offset = rim_radius_m * np.array([np.cos(grasp_angle_rad), np.sin(grasp_angle_rad)])
+    grasp = np.array([*(bowl_xy + rim_offset), rim_height_m])
+    place = np.array([*(plate_xy + rim_offset), plate_height_m + rim_height_m + 0.01])
+    start = np.asarray(start_xyz_table, float)
+    above_grasp = grasp + np.array([0.0, 0.0, 0.10])
+    above_place = place + np.array([0.0, 0.0, 0.10])
+    retreat = place + np.array([0.0, 0.0, 0.15])
+
+    # (target, duration_s, aperture_after): aperture is 9 cm open or 1.5 cm pinched
+    legs = [
+        (above_grasp, 1.4, 0.09),
+        (grasp, 0.8, 0.09),
+        (grasp, 0.5, 0.015),
+        (above_grasp, 0.7, 0.015),
+        (above_place, 1.2, 0.015),
+        (place, 0.7, 0.015),
+        (place, 0.5, 0.09),
+        (retreat, 0.8, 0.09),
+    ]
+    positions, apertures = [start], [0.09]
+    for target, duration_s, aperture_after in legs:
+        steps = max(2, int(round(duration_s * rate_hz)))
+        eased = _min_jerk(np.linspace(0.0, 1.0, steps + 1)[1:])[:, None]
+        segment = positions[-1] + eased * (target - positions[-1])
+        positions.extend(segment)
+        apertures.extend(
+            apertures[-1] + _min_jerk(np.linspace(0.0, 1.0, steps + 1)[1:]) * (aperture_after - apertures[-1])
+        )
+    tcp = np.asarray(positions)
+    tcp += rng.normal(0.0, 0.002, tcp.shape)
+    aperture = np.asarray(apertures)
+    is_grasping = GraspSegmenter(0.03, 0.05).segment(aperture)
+    grasp_idx, release_idx = GraspSegmenter.find_transition_frames(is_grasping)
+    return HumanDemo(
+        timestamps_s=np.arange(len(tcp)) / rate_hz,
+        tcp_pos_table=tcp,
+        pinch_aperture_m=aperture,
+        is_grasping=is_grasping,
+        t_table_bowl=make_transform(Rotation.identity(), [*bowl_xy, 0.0]),
+        t_table_plate=make_transform(Rotation.identity(), [*plate_xy, 0.0]),
+        t_table_cam=np.eye(4),
+        source_video=Path("synthetic"),
+        grasp_frame_idx=grasp_idx,
+        release_frame_idx=release_idx,
+    )

@@ -76,7 +76,7 @@ class FakeMarkers:
         return self._poses
 
 
-def _run(dropped: set[int]):
+def _run(dropped: set[int], config: ExtractionConfig | None = None):
     t_s = np.arange(0, DURATION_S, 1 / FPS)
     t_cam_table = _camera_looking_at_table()
     tcp_cam = apply_transform(t_cam_table, _true_trajectory_table(t_s)) * DEPTH_ERROR
@@ -84,7 +84,7 @@ def _run(dropped: set[int]):
         FakeTracker(tcp_cam, _aperture(t_s), dropped),
         FakeMarkers(t_cam_table),
         GraspSegmenter(close_threshold_m=0.03, open_threshold_m=0.05),
-        ExtractionConfig(),
+        config or ExtractionConfig(),
     )
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     return extractor.extract_frames(((frame, t) for t in t_s), Path("synthetic.mp4"))
@@ -98,6 +98,16 @@ def test_anchor_correction_recovers_true_depth_and_trajectory() -> None:
     assert report.release_to_plate_xy_m < 0.03
     truth = _true_trajectory_table(demo.timestamps_s)
     # Savitzky-Golay rounds the corners, so compare away from the grasp and release.
+    interior = (np.abs(demo.timestamps_s - 1.15) > 0.3) & (np.abs(demo.timestamps_s - 2.45) > 0.3)
+    assert np.abs(demo.tcp_pos_table - truth)[interior].max() < 0.01
+
+
+def test_height_anchor_recovers_depth_without_a_marker_at_the_grasp() -> None:
+    # The bowl marker is moved away from the grasp point (as when it lies on a pad beside the bowl),
+    # so only the known grasp height can fix the depth.
+    demo, report = _run(dropped=set(), config=ExtractionConfig(grasp_height_m=float(P_BOWL[2]) + 0.0))
+    assert report.anchor_scale == pytest.approx(1 / DEPTH_ERROR, abs=0.02)
+    truth = _true_trajectory_table(demo.timestamps_s)
     interior = (np.abs(demo.timestamps_s - 1.15) > 0.3) & (np.abs(demo.timestamps_s - 2.45) > 0.3)
     assert np.abs(demo.tcp_pos_table - truth)[interior].max() < 0.01
 

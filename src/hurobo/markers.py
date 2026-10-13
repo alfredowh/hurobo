@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from hurobo.camera import CameraIntrinsics
-from hurobo.utils.transforms import invert_transform, rvec_tvec_to_transform
+from hurobo.utils.transforms import invert_transform, make_transform, rvec_tvec_to_transform
 
 
 @dataclass
@@ -21,12 +22,16 @@ class MarkerLayout:
         object_marker_ids: {role_name: marker_id}, e.g. {"bowl": 1, "plate": 2}.
         object_marker_length_m: printed side length of the object markers (assumed
             uniform across objects; use separate layouts if they differ).
+        object_marker_offsets_m: {role_name: (x, y, z)} position of the object's reference point
+            (its centre) in the marker's own frame, for a marker that sits beside the object on a pad
+            instead of on it. Roles left out use the marker origin.
     """
 
     table_marker_id: int
     table_marker_length_m: float
     object_marker_ids: dict[str, int]
     object_marker_length_m: float
+    object_marker_offsets_m: dict[str, tuple[float, float, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -117,12 +122,32 @@ class MarkerPoseEstimator:
 
         Returns:
             {"table": T_cam_table, role_name: T_table_<role> for each detected
-            object marker}, or None if the table marker itself wasn't found
+            object marker}, or None if the table frame itself wasn't found
             (without it there is no world frame to express anything else in).
         """
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self._detector.detectMarkers(gray)
         ids = np.empty(0, dtype=int) if ids is None else ids.flatten()
+        t_cam_table = self._table_pose(gray, corners, ids)
+        if t_cam_table is None:
+            return None
+        t_table_cam = invert_transform(t_cam_table)
+
+        poses = {"table": t_cam_table}
+        for role, marker_id in self._layout.object_marker_ids.items():
+            role_mask = ids == marker_id
+            if not role_mask.any():
+                continue
+            role_idx = int(np.argmax(role_mask))
+            t_cam_marker = self._estimate_marker_pose(corners[role_idx], self._layout.object_marker_length_m)
+            offset = self._layout.object_marker_offsets_m.get(role)
+            if offset is not None:
+                t_cam_marker = t_cam_marker @ make_transform(Rotation.identity(), np.asarray(offset))
+            poses[role] = t_table_cam @ t_cam_marker
+        return poses
+
+    def _table_pose(self, gray: np.ndarray, corners: list, ids: np.ndarray) -> np.ndarray | None:
+        """T_cam_table from the single table marker; records what was seen in `last_detection`."""
         table_mask = ids == self._layout.table_marker_id
         mirrored = False
         if not table_mask.any():
@@ -139,18 +164,79 @@ class MarkerPoseEstimator:
         if not table_mask.any():
             return None
         table_idx = int(np.argmax(table_mask))
-        t_cam_table = self._estimate_marker_pose(corners[table_idx], self._layout.table_marker_length_m)
-        t_table_cam = invert_transform(t_cam_table)
+        return self._estimate_marker_pose(corners[table_idx], self._layout.table_marker_length_m)
 
-        poses = {"table": t_cam_table}
-        for role, marker_id in self._layout.object_marker_ids.items():
-            role_mask = ids == marker_id
-            if not role_mask.any():
-                continue
-            role_idx = int(np.argmax(role_mask))
-            t_cam_object = self._estimate_marker_pose(corners[role_idx], self._layout.object_marker_length_m)
-            poses[role] = t_table_cam @ t_cam_object
-        return poses
+
+class BoardMarkerPoseEstimator(MarkerPoseEstimator):
+    """Like `MarkerPoseEstimator`, but the table frame is a ChArUco board (e.g. shown on a tablet).
+
+    The frame is the same one `scan.align_charuco_table` gives the table scans: origin at the board's
+    outer top-left corner, x along the long side, y toward the top of the board image, z up, and z = 0
+    on the tabletop, i.e. `board_thickness_m` below the board surface. Clips filmed in this frame and
+    the scan splats therefore share coordinates without an alignment step.
+
+    `layout.table_marker_*` is ignored; `layout.object_marker_*` works as in the base class.
+    """
+
+    MIN_CORNERS = 6
+
+    def __init__(
+        self,
+        intrinsics: CameraIntrinsics,
+        layout: MarkerLayout,
+        board: cv2.aruco.CharucoBoard,
+        board_thickness_m: float,
+        dictionary: int = cv2.aruco.DICT_4X4_50,
+    ) -> None:
+        """Set up the detector.
+
+        Args:
+            intrinsics: calibrated intrinsics of the camera that filmed the frames.
+            layout: object marker ids, size and offsets.
+            board: the board as displayed (squares must be measured on the screen).
+            board_thickness_m: height of the board surface above the tabletop.
+            dictionary: ArUco dictionary of the board and object markers.
+        """
+        super().__init__(intrinsics, layout, dictionary)
+        self._board = board
+        self._charuco = cv2.aruco.CharucoDetector(board)
+        # p_board = F p_table + (0, 0, t): the board's own z points into the table, so y and z flip.
+        flip = np.diag([1.0, -1.0, -1.0])
+        self._t_board_table = np.eye(4)
+        self._t_board_table[:3, :3] = flip
+        self._t_board_table[:3, 3] = [0.0, 0.0, board_thickness_m]
+
+    def _table_pose(self, gray: np.ndarray, corners: list, ids: np.ndarray) -> np.ndarray | None:
+        """T_cam_table from the ChArUco corners (planar PnP, refined)."""
+        charuco_corners, charuco_ids, _, _ = self._charuco.detectBoard(gray)
+        found = charuco_ids is not None and len(charuco_ids) >= self.MIN_CORNERS
+        self._last_detection = MarkerDetection(
+            [int(i) for i in ids],
+            [c.reshape(4, 2) for c in corners],
+            self._layout.table_marker_id,
+            bool(found),
+        )
+        if not found:
+            return None
+        object_points, image_points = self._board.matchImagePoints(charuco_corners, charuco_ids)
+        ok, rvec, tvec = cv2.solvePnP(
+            object_points,
+            image_points,
+            self._intrinsics.camera_matrix,
+            self._intrinsics.dist_coeffs,
+            flags=cv2.SOLVEPNP_IPPE,
+        )
+        if not ok:
+            return None
+        rvec, tvec = cv2.solvePnPRefineLM(
+            object_points,
+            image_points,
+            self._intrinsics.camera_matrix,
+            self._intrinsics.dist_coeffs,
+            rvec,
+            tvec,
+        )
+        return rvec_tvec_to_transform(rvec, tvec) @ self._t_board_table
 
 
 def render_marker_image(

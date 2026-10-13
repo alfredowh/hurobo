@@ -48,6 +48,11 @@ class ExtractionConfig:
         anchor_depth: scale the TCP depth so the grasp lands on the bowl marker. Turn it
             off when the bowl marker is not where the hand actually grasps (stand-in clips,
             teleoperation without a real bowl); depth then keeps MediaPipe's hand-size prior.
+        grasp_height_m: if set, the depth is anchored differently: the camera ray through the grasp
+            point is intersected with the horizontal plane this high above the table, and the TCP
+            trajectory is scaled so the grasp lands there. Use it when the bowl marker lies on the
+            table beside the bowl, so it says nothing about the depth of a grasp at the rim, but the
+            rim height is known. A height error of e cm moves the grasp by about e / tan(elevation).
         anchor_scale_bounds: accepted range of the grasp-anchor depth scale; outside
             it the clip is flagged (the hand model or the intrinsics are off).
         min_hand_fraction: minimum share of frames with a hand detection, within the
@@ -61,6 +66,7 @@ class ExtractionConfig:
     layout_window_s: float = 0.6
     smooth_window: int = 9
     anchor_depth: bool = True
+    grasp_height_m: float | None = None
     anchor_scale_bounds: tuple[float, float] = (0.6, 1.6)
     min_hand_fraction: float = 0.85
     max_grasp_to_bowl_m: float = 0.10
@@ -231,9 +237,14 @@ class DemoExtractor:
         report.grasp_found, report.release_found = grasp_idx is not None, release_idx is not None
 
         if grasp_idx is not None and cfg.anchor_depth:
-            tcp_cam_s, report.anchor_scale = self._anchor_correct(
-                tcp_cam_s, grasp_idx, t_cam_table, t_table_bowl
-            )
+            if cfg.grasp_height_m is None:
+                tcp_cam_s, report.anchor_scale = self._anchor_correct(
+                    tcp_cam_s, grasp_idx, t_cam_table, t_table_bowl
+                )
+            else:
+                tcp_cam_s, report.anchor_scale = self._anchor_to_height(
+                    tcp_cam_s, grasp_idx, t_table_cam, cfg.grasp_height_m
+                )
         tcp_table = apply_transform(t_table_cam, tcp_cam_s)
 
         if grasp_idx is not None:
@@ -283,6 +294,36 @@ class DemoExtractor:
         p_tcp_cam = np.median(window, axis=0)
         p_bowl_cam = apply_transform(t_cam_table, t_table_bowl[:3, 3])
         scale = float(p_tcp_cam @ p_bowl_cam / (p_tcp_cam @ p_tcp_cam))
+        return tcp_cam * scale, scale
+
+    @staticmethod
+    def _anchor_to_height(
+        tcp_cam: np.ndarray, grasp_idx: int, t_table_cam: np.ndarray, height_m: float
+    ) -> tuple[np.ndarray, float]:
+        """Scale the TCP trajectory along each camera ray so the grasp sits `height_m` above the table.
+
+        Same idea as `_anchor_correct`, with the plane z = height_m (table frame) as the constraint
+        instead of a point. The pixel ray through the grasp is accurate; only the depth along it is not.
+
+        Args:
+            tcp_cam: shape (N, 3), TCP in the camera frame.
+            grasp_idx: grasp-onset sample index.
+            t_table_cam: 4x4 camera pose in the table frame.
+            height_m: grasp height above the tabletop.
+
+        Returns:
+            (corrected tcp_cam, s). s is 1.0 if the ray does not reach the plane in front of the camera.
+        """
+        window = tcp_cam[max(grasp_idx - 1, 0) : grasp_idx + 2]
+        p_tcp_cam = np.median(window, axis=0)
+        direction = p_tcp_cam / np.linalg.norm(p_tcp_cam)
+        slope = t_table_cam[2, :3] @ direction  # z rate of the ray in the table frame
+        if abs(slope) < 1e-6:
+            return tcp_cam, 1.0
+        distance = (height_m - t_table_cam[2, 3]) / slope
+        if distance <= 0:
+            return tcp_cam, 1.0
+        scale = float(distance / np.linalg.norm(p_tcp_cam))
         return tcp_cam * scale, scale
 
     def _apply_gates(self, report: ClipReport) -> None:
@@ -343,6 +384,7 @@ def extract_demo(
     layout: MarkerLayout,
     segmenter: GraspSegmenter | None = None,
     config: ExtractionConfig | None = None,
+    marker_estimator: MarkerEstimator | None = None,
 ) -> tuple[HumanDemo, ClipReport]:
     """Extract one clip with the standard MediaPipe + ArUco perception stack.
 
@@ -355,6 +397,8 @@ def extract_demo(
         layout: which ArUco ids mark the table and the objects.
         segmenter: grasp/release thresholds; defaults to 3 cm close / 5 cm open.
         config: QC gates; defaults to `ExtractionConfig()`.
+        marker_estimator: replaces the single-table-marker estimator built from `layout`, e.g. a
+            `BoardMarkerPoseEstimator` that takes the table frame from a ChArUco board.
 
     Returns:
         The demo and its quality report.
@@ -365,7 +409,7 @@ def extract_demo(
     with HandTcpTracker(intrinsics) as tracker:
         extractor = DemoExtractor(
             tracker,
-            MarkerPoseEstimator(intrinsics, layout),
+            marker_estimator or MarkerPoseEstimator(intrinsics, layout),
             segmenter or GraspSegmenter(0.03, 0.05),
             config,
         )
