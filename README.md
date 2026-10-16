@@ -120,9 +120,7 @@ All of this comes from my own phone clips of one table, one bowl and one plate. 
 
 ![Sweep over the whole-scene splat](assets/scene_orbit.gif)
 
-![Held-out views, photo left, splat right](assets/scene_photo_vs_splat.png)
-
-Interactive 3D view (orbit, pan, crop box; GitHub cannot run it, so open it locally):
+Interactive 3D view (orbit, pan, crop box):
 
 ```bash
 uv run python -c "from pathlib import Path; from hurobo.utils.viewer import write_splat_viewer; write_splat_viewer(Path('data/splats/table_zoom_02_03_scene.ply'), Path('data/viewer/table_zoom_02_03_scene'))"
@@ -133,9 +131,11 @@ uv run python -m http.server 8791 -d data/viewer/table_zoom_02_03_scene   # then
 
 **The scanned bowl and plate**, rendered from four sides (the plate's last row has its gaps closed with a measured shape prior, [D-009](docs/design_decisions.md); the rim and profile there come from the prior, not from the scan):
 
-![Scanned bowl and plate](assets/bowl_plate_splats.png)
+![Sweep over the scanned bowl and plate](assets/bowl_plate_orbit.gif)
 
-**Bowl and plate inside the LIBERO scene**, scaled to the measured diameters (bowl 13.8 cm, plate 25.5 cm) and composited with the mesh robot by depth. The table cloth is still LIBERO's. The splats change only the appearance; physics and collisions are LIBERO's own bodies.
+The same view as the whole scene, cut to the two objects. The brown halo under them is table cloth the crop leaves behind. [07_whole_scene](examples/07_whole_scene.ipynb) writes this sweep, and its layer switch shows the bowl and plate alone in 3D.
+
+**Bowl and plate inside the LIBERO scene**, scaled to the measured diameters (bowl 13.8 cm, plate 25.5 cm), with the plate's gaps filled by the shape prior, and composited with the mesh robot by depth. Two camera views. The table cloth is still LIBERO's. The splats change only the appearance; physics and collisions are LIBERO's own bodies.
 
 ![Scanned bowl and plate in LIBERO](assets/libero_scanned_bowl_plate.png)
 
