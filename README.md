@@ -12,9 +12,9 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Current state.** The perception, twin, retargeting and generation code is built and tested on stand-in hand paths. One real clip is processed (below); its robot replay timed out. The 15 to 20 clip session is not recorded, and no policy is trained on my data yet. What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
 
-![A recorded human demo: markers, hand skeleton, TCP path and gripper signal](assets/human_demo_recording.jpg)
+![A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action](assets/episode_dashboard.gif)
 
-*Real clip `test_03`, cut to one grasp cycle: marker outlines (plate id 22, bowl pad id 21, ChArUco board), hand skeleton, projected TCP path (red: carried, blue: path so far) and the gripper symbol from the pinch aperture. Notebook [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb).*
+*Real clip `test_03`, cut to one grasp cycle and read back from the LeRobot dataset (`episode_0`). Top left: marker outlines (plate id 22, bowl pad id 21, ChArUco board), hand skeleton, projected TCP path (red: carried, blue: path so far) and the gripper symbol. Top right: the TCP path in the table frame. Bottom: pinch aperture with its open and close thresholds, state and action signals. Notebook [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb).*
 
 
 ---
@@ -279,8 +279,11 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 | [06_scan_parameter_sweep](examples/06_scan_parameter_sweep.ipynb) | How SfM settings, matching mode, keyframe spacing and training length change a real phone scan (registration, orbit coverage, held-out PSNR), and three ways of cropping the object compared against an independent reference. Real clip, not committed. |
 | [07_whole_scene](examples/07_whole_scene.ipynb) | The whole table scan merged into one splat: interactive 3D view with a layer switch, photo and splat renders from the phone's camera path, a browser viewer with a crop box, still 3D views of the cut scene and the README sweep. |
 | [08_scaled_native_experiment](examples/08_scaled_native_experiment.ipynb) | Experiment E1: real-size bowl and plate in LIBERO, the recording plan (phone pose, layouts, markers, commands), human demo to robot demo from the home pose, success rate of retargeted rollouts. Hand input is made up. |
+| [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) | SmolVLA benchmark in LIBERO: the two most-liked LIBERO checkpoints in three scene conditions (stock, cleared table, cleared table with real-size bowl and plate), success with Wilson intervals, how far episodes got, open-loop action error, rollout videos. |
+| [10_clip_cleaning](examples/10_clip_cleaning.ipynb) | Cleaning real phone clips before extraction: per-frame filters (no hand, two hands, bad fit, image edge, depth), the cut to one open-close-open cycle, clip filters, the per-clip timeline and the proposed `cuts.json`. Real clips, not committed. |
+| [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb) | One cleaned real clip end to end: overlay video, LeRobot episode dashboard, interactive TCP and aperture, the human's bowl and plate layout in the sim, robot replay in the scaled LIBERO scene, dataset and replay side by side. Real clip, not committed. |
 
-Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebook 06 is the exception and reads results from a real phone clip of a bowl. Each notebook states this in its introduction.
+Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebooks 06, 10 and 11 are the exception: they read real phone clips (not committed), and 09 reads benchmark results. Each notebook states this in its introduction.
 
 ```bash
 uv run jupyter lab examples/

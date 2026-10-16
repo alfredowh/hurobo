@@ -63,3 +63,18 @@ def test_save_gif_loops_forward_and_back(tmp_path: Path) -> None:
     path = save_gif(frames, tmp_path / "out" / "sweep.gif")
     with Image.open(path) as gif:
         assert gif.n_frames == 6  # 4 forward + 2 back, endpoints not repeated
+
+
+def test_video_to_gif_downscales_and_keeps_duration(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from hurobo.utils.video import video_to_gif
+
+    video = tmp_path / "clip.mp4"
+    with VideoWriter(video, fps=20.0, frame_size=(64, 32)) as writer:
+        for value in range(20):
+            writer.write(np.full((32, 64, 3), value * 10, dtype=np.uint8))
+    gif_path = video_to_gif(video, tmp_path / "out" / "clip.gif", width=32, fps=10.0)
+    with Image.open(gif_path) as gif:
+        assert gif.size == (32, 16)
+        assert gif.n_frames == 10  # 20 frames at 20 Hz sampled to 10 Hz

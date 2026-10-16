@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections.abc import Iterator
+from itertools import zip_longest
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -196,6 +197,32 @@ def save_gif(frames: list[np.ndarray], path: Path, fps: float = 12.0, boomerang:
         path, save_all=True, append_images=images[1:], duration=round(1000 / fps), loop=0, optimize=True
     )
     return path
+
+
+def video_to_gif(video_path: Path, gif_path: Path, width: int = 720, fps: float = 10.0) -> Path:
+    """Convert a video to a looping GIF for the README, subsampling frames and downscaling.
+
+    Args:
+        video_path: source video; its own frame rate is read from the file.
+        gif_path: output `.gif`; parent folders are created.
+        width: output width in pixels; height keeps the aspect ratio.
+        fps: GIF playback rate. Source frames are dropped to match it, so playback speed is unchanged.
+
+    Returns:
+        `gif_path`.
+    """
+    capture = cv2.VideoCapture(str(video_path))
+    source_fps = capture.get(cv2.CAP_PROP_FPS) or fps
+    capture.release()
+    step = max(1, round(source_fps / fps))
+    frames = []
+    for index, frame_bgr in enumerate(read_frames(video_path)):
+        if index % step:
+            continue
+        height = round(frame_bgr.shape[0] * width / frame_bgr.shape[1])
+        resized = cv2.resize(frame_bgr, (width, height), interpolation=cv2.INTER_AREA)
+        frames.append(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
+    return save_gif(frames, gif_path, fps=source_fps / step, boomerang=False)
 
 
 def hstack_resized(frames: list[np.ndarray], target_height: int = 480) -> np.ndarray:
@@ -547,6 +574,51 @@ class FrameReel:
             )
         flow_ab, flow_ba = self._flows[left]
         return interpolate_frames(self._frames[left], self._frames[right], alpha, flow_ab, flow_ba)
+
+
+def write_side_by_side_video(
+    left_path: Path, right_path: Path, out_path: Path, labels: tuple[str, str], height: int = 480
+) -> Path:
+    """Two videos of the same frame rate side by side, frame for frame; the shorter holds its last frame.
+
+    Args:
+        left_path: video shown on the left.
+        right_path: video shown on the right.
+        out_path: output .mp4 (H.264); the parent folder is created.
+        labels: captions of the left and right video.
+        height: output height in pixels.
+
+    Returns:
+        `out_path`.
+
+    Raises:
+        ValueError: if the two frame rates differ (the videos would drift apart).
+    """
+    fps = get_video_fps(left_path)
+    if abs(fps - get_video_fps(right_path)) > 0.01:
+        raise ValueError("the videos must have the same frame rate to be shown frame for frame")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    last: list[np.ndarray | None] = [None, None]
+    writer = None
+    try:
+        for pair in zip_longest(read_frames(left_path), read_frames(right_path)):
+            panels = []
+            for side, (frame, label) in enumerate(zip(pair, labels, strict=True)):
+                if frame is not None:
+                    last[side] = frame
+                panel = last[side].copy()
+                draw_outlined_text(
+                    panel, label if frame is not None else f"{label} (ended)", (10, panel.shape[0] - 14), 0.8
+                )
+                panels.append(panel)
+            stacked = hstack_resized(panels, height)
+            if writer is None:
+                writer = VideoWriter(out_path, fps, (stacked.shape[1], stacked.shape[0]))
+            writer.write(stacked)
+    finally:
+        if writer is not None:
+            writer.close()
+    return out_path
 
 
 def slow_down_video(source_path: Path, output_path: Path, factor: float, output_fps: float = 20.0) -> Path:

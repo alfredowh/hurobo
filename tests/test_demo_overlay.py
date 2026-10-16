@@ -117,3 +117,19 @@ def test_overlay_video_is_slowed_and_held_by_repeating_frames(tmp_path: Path) ->
     out = overlay.write_video(tmp_path / "out.mp4", width_px=64, slowdown=2.0, hold_start_s=1.0, fps=10.0)
     # 1 s held + 0.9 s of motion x2 = 2.8 s at 10 fps
     assert sum(1 for _ in read_frames(out)) == 28
+
+
+def test_side_by_side_video_holds_the_shorter_one(tmp_path: Path) -> None:
+    from hurobo.utils.video import VideoWriter, read_frames, write_side_by_side_video
+
+    def clip(name: str, frames: int) -> Path:
+        path = tmp_path / name
+        with VideoWriter(path, 10.0, (64, 48)) as writer:
+            for _ in range(frames):
+                writer.write(np.zeros((48, 64, 3), np.uint8))
+        return path
+
+    out = write_side_by_side_video(clip("a.mp4", 5), clip("b.mp4", 12), tmp_path / "out.mp4", ("a", "b"))
+    frames = list(read_frames(out))
+    assert len(frames) == 12
+    assert frames[0].shape[1] > 64  # two panels wide

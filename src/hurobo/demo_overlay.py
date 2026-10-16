@@ -116,6 +116,7 @@ class DemoOverlay:
         slowdown: float = 1.0,
         hold_start_s: float = 0.0,
         fps: float | None = None,
+        start_sample: int = 0,
     ) -> Path:
         """Video of the demo's kept stretch with the overlay, optionally slowed and held at the start.
 
@@ -127,13 +128,19 @@ class DemoOverlay:
             hold_start_s: seconds the first frame is held before the motion starts (the human waits for
                 the robot).
             fps: output rate; the clip's own by default, 20 when slowed.
+            start_sample: demo sample the video starts at (the part before it is left out), e.g. where the
+                part the robot replays begins.
 
         Returns:
             `out_path`.
         """
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        start = self._demo.source_start_time_s
-        stop = start + float(self._demo.timestamps_s[-1])
+        start = self._demo.source_start_time_s + float(
+            self._demo.timestamps_s[start_sample] - self._demo.timestamps_s[0]
+        )
+        stop = self._demo.source_start_time_s + float(
+            self._demo.timestamps_s[-1] - self._demo.timestamps_s[0]
+        )
         video = self._demo.source_video
         out_fps = fps or (get_video_fps(video) if slowdown == 1.0 else 20.0)
         writer = None
