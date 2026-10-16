@@ -122,14 +122,34 @@ What is **not** taken from you: the hand's orientation, its speed, where it star
 
 ## 7. After recording
 
+Five steps, in this order: clean the clips, convert them to table-frame demos, export them as a LeRobot dataset, replay them on the robot, and generate the robot dataset. Each step reads the output of the one before.
+
+### 7.1 Clean the clips
+
+A raw clip has stretches with no hand, sometimes a second hand, and often more than one grasp. The cleaning step proposes one clean stretch per clip and rejects clips that cannot give a demo:
+
 ```bash
-# human clips -> table-frame demos + a QC report (reads sizes from measurements.yaml)
-uv run python scripts/02_extract_demos.py data/raw/e1/clip_*.mp4 \
-    --setup data/raw/setup_01/measurements.yaml \
-    --intrinsics data/camera_intrinsics_s10e.npz --out data/e1/demos
+uv run python scripts/20_clean_clips.py data/raw/e1 --setup data/raw/setup_01/measurements.yaml \
+    --intrinsics data/camera_intrinsics_s10e.npz
+uv run python scripts/21_clip_cutter.py data/raw/e1 --setup data/raw/setup_01/measurements.yaml \
+    --intrinsics data/camera_intrinsics_s10e.npz
 ```
 
-It prints `OK` or `FLAG` per clip with the reasons and writes `data/e1/demos/summary.json`. Clips are never dropped silently; a flagged clip is skipped by the next steps.
+- `20_clean_clips.py` drops frames with no hand, with two hands, with a badly fitted hand, or with the hand touching the image edge. It keeps the stretch where the pinch is open, closes once and opens again. It rejects clips that are too short or where the markers were not seen at the start. The result is `data/raw/e1/cuts.json`; per-frame signals are cached in `data/raw/e1/.analysis/`, so a rerun is quick.
+- `21_clip_cutter.py` is the review UI: the video beside the same signals, with draggable start and end handles. A cut you adjust is saved as `manual` and is kept when you rerun step 20 (unless you pass `--overwrite-manual`).
+
+Notebook: [`examples/10_clip_cleaning.ipynb`](../examples/10_clip_cleaning.ipynb).
+
+### 7.2 Convert the clips to table-frame demos
+
+```bash
+uv run python scripts/02_extract_demos.py data/raw/e1/clip_*.mp4 \
+    --setup data/raw/setup_01/measurements.yaml \
+    --intrinsics data/camera_intrinsics_s10e.npz \
+    --cuts data/raw/e1/cuts.json --out data/e1/demos
+```
+
+Only the frames inside each cut are used, and clips the cleaning rejected are skipped. Each clip becomes a `<clip>.npz` demo: the hand TCP, the pinch aperture and the grasp and release events, the bowl and plate poses and the camera pose, all in the table frame (section 6). It prints `OK` or `FLAG` per clip with the reasons and writes `data/e1/demos/summary.json`. Clips are never dropped silently; a flagged clip is skipped by the next steps.
 
 | Reason printed | Likely cause | Fix |
 |---|---|---|
@@ -141,18 +161,34 @@ It prints `OK` or `FLAG` per clip with the reasons and writes `data/e1/demos/sum
 | `anchor scale ... outside [0.6, 1.6]` | wrong intrinsics, wrong pinch height, wrong bowl height in `measurements.yaml` | check them |
 | `grasp N m from bowl marker` | pad moved during the clip, or you grasped elsewhere | re-record |
 
-Then replay them on the robot (videos, one per clip) and generate the robot dataset:
+### 7.3 Export the demos as a LeRobot dataset
+
+```bash
+uv run python scripts/11_export_human_dataset.py data/e1/demos \
+    --intrinsics data/camera_intrinsics_s10e.npz --out data/e1/human
+```
+
+This is what you recorded, in LeRobot format: one episode per demo at 20 fps, the phone image (640 x 360), the TCP and the pinch aperture as `observation.state`, the next-step TCP displacement and the grasp flag as a human-proxy `action`, and the bowl and plate poses. Flagged clips are left out unless you pass `--include-flagged`. The robot never sees this dataset; it is the record of the recording.
+
+Notebook: [`examples/11_recorded_dataset_and_replay.ipynb`](../examples/11_recorded_dataset_and_replay.ipynb) draws the clip with the dataset's TCP, hand and gripper on it, shows the episode dashboard, and replays the demo in the LIBERO scene.
+
+### 7.4 Replay the demos on the robot
 
 ```bash
 MUJOCO_GL=egl uv run python scripts/03_replay.py data/e1/demos \
-    --setup data/raw/setup_01/measurements.yaml --out data/e1/replay
+    --setup data/raw/setup_01/measurements.yaml --out data/e1/replay --clamp-layout
+```
+
+One video per clip: the robot starts from home on **your** layout (the sim twin of the clip). A layout that misses the arm's reach by a few millimetres is skipped unless you pass `--clamp-layout`, which snaps the bowl and plate into the work area. The notebook above also replays a demo slowed to the robot's speed limit with the robot paced to it (`RetargetConfig(paced=True)`); that mode is not used by the generation below.
+
+### 7.5 Generate the robot dataset
+
+```bash
 MUJOCO_GL=egl uv run python scripts/04_generate_dataset.py data/e1/demos \
     --setup data/raw/setup_01/measurements.yaml --count 200 --out data/e1/generated
 ```
 
-`03_replay.py` puts the robot on **your** layout (the sim twin of the clip). `04_generate_dataset.py` draws new random layouts and keeps only rollouts that LIBERO's check accepts; its output has the feature names, image orientation and state formula of LIBERO's LeRobot datasets.
-
-The optional human dataset in LeRobot format (what you recorded, for the record): `scripts/11_export_human_dataset.py` (see the notebook's command list).
+`04_generate_dataset.py` draws new random layouts and keeps only rollouts that LIBERO's check accepts; its output has the feature names, image orientation and state formula of LIBERO's LeRobot datasets.
 
 ## 8. Train and evaluate
 

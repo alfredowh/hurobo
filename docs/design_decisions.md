@@ -37,7 +37,7 @@ happened **after** that: defaults that did not work on our data, and what we did
 | Splat rendering / compositing | DISCOVERSE `gaussian-renderer` | As-is | `load_ply` and rasterisation; compositing code is ours. |
 | Collision geometry | open3d, CoACD | As-is | |
 | SmolVLA checkpoints for LIBERO | `lerobot/smolvla_libero`, `HuggingFaceVLA/smolvla_libero` | As-is | D-011. Weights unchanged; our own closed-loop evaluation, since `lerobot-eval` rebuilds the stock scene. |
-| SmolVLA fine-tuning | `lerobot-train` from `lerobot/smolvla_base` | Configured | D-011. Camera rename and expert-only training; 20-step smoke run only. |
+| SmolVLA fine-tuning | `lerobot-train` from `lerobot/smolvla_base` | Configured | D-011, D-013. Camera rename, expert-only training, batch 16, 3000 steps with a short schedule; one run on 100 generated episodes. |
 | Retargeting | MimicGen idea (concept only) | Novel (own code) | MimicGen is cited, not installed. D-010. |
 | LIBERO scene for E1 (scaled bowl and plate, other objects parked) | `libero_goal` task 8 | **Modified** | D-010. Our own env loop is needed; `lerobot-eval` rebuilds the stock scene. |
 | Table frame from a ChArUco board for human clips | OpenCV ArUco/ChArUco | Novel (own code, `BoardMarkerPoseEstimator`) | Same frame as the table scans (D-009). D-010. |
@@ -379,6 +379,20 @@ Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for 
 **Evidence.** `scripts/20_clean_clips.py "data/raw/e1/test_0*.mp4"`: `test_03` is cut to 2.70-11.10 s and `test_04` to 5.73-14.56 s; `test_01` and `test_02` are rejected (no complete cycle with one hand). Extracting `test_03` with and without the cut: the two dropout reasons disappear (169 against 310 samples). 10 unit tests in `tests/test_clip_clean.py`. Notebook 10.
 **Status and limits.** Default thresholds are guesses checked on four clips, not tuned: no ground truth for where a human would cut. The extraction still decides grasp and release by its own smoothed hysteresis, which can differ from the cleaner's on noisy clips. `test_03` still fails the extraction gates on position ("grasp 0.45 m from bowl marker", "release 0.33 m from plate marker"): the cut does not address it (see the open issues).
 **README:** not added: a data-preparation step, validated on four test clips only.
+
+---
+
+### D-013 · 2026-10-16 · SmolVLA fine-tuning settings for a 50-minute budget, and per-checkpoint evaluation
+
+**Component:** `lerobot-train` driven by `hurobo.training.SmolVLATrainConfig`; `hurobo.checkpoint_eval`, `scripts/23_eval_checkpoints.py`. **Status:** Configured (training); own code (evaluation).
+
+**Symptom.** None: this is a first fine-tune, not a fix. SmolVLA's defaults assume a long run (`scheduler_warmup_steps` 1000, cosine decay over 30000 steps, batch 32 in `lerobot/smolvla_libero`). With 3000 steps those defaults would spend a third of the run warming up and the rate would never decay.
+**Cause.** Compute and time: a 16 GB GPU shared with another process (about 3.5 GB), about 50 minutes available after the dataset was generated.
+**Upstream defaults.** lr 1e-4 (peak), warm-up 1000, cosine decay to 2.5e-6 over 30000 steps, batch 32, `train_expert_only` true, vision encoder frozen.
+**Change.** Kept the peak learning rate (1e-4) and expert-only training. Changed: batch 16, 3000 steps (1.35 epochs of the 35.5k frames), warm-up 100, decay length 3000 so the rate falls to 2.5e-6 at the end, checkpoint every 500 steps (six checkpoints), loss logged every 50 steps. Batch 16 and 3000 steps follow from a 60-step smoke run (1.5 steps/s at batch 16 on the shared GPU, 4.5 GB of memory for training), not from a search: nothing was tuned, and a larger batch or more steps were not tried. The fields `learning_rate`, `warmup_steps`, `decay_steps`, `log_freq` were added to `SmolVLATrainConfig` (only passed to `lerobot-train` when set). Evaluation: every checkpoint gets the same 10 layouts (seeds 0-9) in the `scaled` condition at replan 10, with an episode limit of 500 steps because the generated demos are longer than LIBERO's 300-step limit (median 321, 90th percentile 529, maximum 663 frames); episodes needing more than 500 steps count as failures. Open-loop error on 100 frames sampled from the **training** dataset (no held-out episodes exist), so it measures fit.
+**Evidence.** `uv run python scripts/19_train_smolvla.py data/e1/generated_clips --out outputs/e1_smolvla_ckpts/run --steps 3000 --batch-size 16 --save-freq 500 --lr 1e-4 --warmup-steps 100 --decay-steps 3000 --log-freq 50`, then `MUJOCO_GL=egl uv run python scripts/23_eval_checkpoints.py outputs/e1_smolvla_ckpts/run --dataset data/e1/generated_clips --out results/smolvla_ckpts --episodes 10 --max-steps 500 --watch --final-step 3000`; results table and figures in `examples/13_smolvla_checkpoints.ipynb`.
+**Status and limits.** Validated only on this dataset: 100 generated episodes from 12 real clips, of which 5 clips had their release-distance QC gate waived by the user. One training seed, 10 closed-loop episodes per checkpoint (Wilson intervals are wide; differences between checkpoints are noise unless the intervals do not overlap), no held-out episodes for the open-loop error. The results below are in the notebook, not in the README.
+**README:** not added: single seed, 10 episodes per checkpoint, nothing tuned.
 
 ---
 

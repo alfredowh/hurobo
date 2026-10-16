@@ -10,7 +10,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Main concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
 
-**Current state.** The perception, twin, retargeting and generation code is built and tested on stand-in hand paths. One real clip is processed (below); its robot replay timed out. The 15 to 20 clip session is not recorded, and no policy is trained on my data yet. What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
+**Current state.** The perception, twin, retargeting and generation code is built and tested on stand-in hand paths. 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. No policy is trained on this data yet. What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
 
 ![A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action](assets/episode_dashboard.gif)
 
@@ -19,6 +19,8 @@ The first experiment, how to record for it and what the pipeline does with the c
 ![Recorded dataset (left, slowed) next to the LIBERO robot replay (right, paced)](assets/dataset_replay_synchronised.gif)
 
 *The same clip, side by side: the recorded dataset (left, slowed) and the robot replay of that hand path in the scaled LIBERO scene (right, paced to match). Both sides are time-stretched for viewing. The replay did not complete the task (it timed out, see current state). Same notebook.*
+
+**Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). The 70 failures: 37 "bowl not lifted", 33 timeouts. Kept episodes take 224 to 663 control steps (median 321.5, 35 498 frames at 20 Hz); many are longer than the 300 steps `lerobot-eval` allows, and no length filter was applied to this run. Per rollout: a random bowl and plate position and one of the 12 human demos drawn at random (no nearest-layout selection, no action noise: those are in the separate `22_mimicgen_expand.py`); the approach (last 20 cm of the hand path) is anchored to the bowl, the carry (the bowl's path) to the plate; grasp height, finger yaw and release height are set by the robot, not copied from the human. Each episode has the agent-view and wrist camera. Metadata: `data/e1/generated_clips/hurobo_meta.json` (not committed). The success rate is of the generator, not of a trained policy. I have not checked which clips the 100 episodes come from per source.
 
 
 ---
@@ -254,7 +256,7 @@ Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started
 | Teleop | Hand-clip and keyboard teleop of the Panda, live window | ✅ |
 | Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation, robot from the home pose | ✅ on made-up hand paths ([D-010](docs/design_decisions.md)); no real clip yet |
 | Retargeting | Tune grasp height and offset once. Measure success on 20 rollouts. | ⬜ |
-| Generation | `DemoGenerator` and `04_generate_dataset.py` (success only, one process) | ✅ on made-up hand paths; multiprocess not done |
+| Generation | `DemoGenerator` and `04_generate_dataset.py` (success only, one process) | ✅ first run on 12 cleaned real clips: 100 successes of 170 attempts (59 %); multiprocess not done |
 | Training | `05_train.sh`. ACT fallback (about 1 h), then SmolVLA fine-tune. | ⬜ |
 | Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | ⬜ |
 | Figures | GIFs, 3D trajectory plot (human TCP and robot EEF), data-multiplier curve, one failure case | ⬜ |
