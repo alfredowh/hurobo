@@ -11,3 +11,6 @@ __pycache__/
 *.md
 !CHALLENGE.md
 !docs/*.md
+results/
+outputs/
+!eval/*.md

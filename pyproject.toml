@@ -13,6 +13,7 @@ dependencies = [
   "opencv-contrib-python>=4.10",
   "scipy",
   "matplotlib",
+  "pyyaml",
   # Listed here as direct deps so [tool.uv.sources] below actually routes them
   # to the cu126 index (lerobot pulls torch/torchvision only transitively,
   # and a transitive-only reference didn't pick up the source override).

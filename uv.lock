@@ -486,61 +486,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/c3/c5fea892e18631721a7d7e492a790bde8e3dc930861866bedb38762d0d7c/egl_probe-1.0.2.tar.gz", hash = "sha256:29bdca7b08da1e060cfb42cd46af8300a7ac4f3b1b2eeb16e545ea16d9a5ac93", size = 217495, upload-time = "2021-07-16T08:50:18.481Z" }
 
 [[package]]
-name = "hurobo"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "coacd", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "gaussian-renderer", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "gsplat", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "lerobot", extra = ["libero", "smolvla", "training"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "matplotlib", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "mediapipe", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "open3d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "opencv-contrib-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "pycolmap", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "scipy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ipykernel", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nbclient", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nbconvert", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "plotly", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "ruff", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "coacd", specifier = ">=1.0.14" },
-    { name = "gaussian-renderer", specifier = "==0.2.0" },
-    { name = "gsplat", specifier = "==1.5.3" },
-    { name = "lerobot", extras = ["smolvla", "libero", "training"], specifier = ">=0.6.1,<0.7" },
-    { name = "matplotlib" },
-    { name = "mediapipe" },
-    { name = "open3d", specifier = ">=0.20.0" },
-    { name = "opencv-contrib-python", specifier = ">=4.10" },
-    { name = "pycolmap", specifier = ">=4.2.1" },
-    { name = "scipy" },
-    { name = "torch", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "torchvision", index = "https://download.pytorch.org/whl/cu126" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ipykernel" },
-    { name = "nbclient", specifier = ">=0.11.0" },
-    { name = "nbconvert", specifier = ">=7.17.1" },
-    { name = "plotly", specifier = ">=7.1.0" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -877,6 +822,63 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/25/2a/484d112c0d8fc5f665d7b65137ac9cdb2953c982391598c3597968a12ee7/huggingface_hub-1.33.0.tar.gz", hash = "sha256:367be21a201db9523eddf8aeac7048f2602c1b308691c97640d5e72ed188007e", size = 1043548, upload-time = "2026-09-24T09:49:29.971Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/16/963096d224b80909432dc16561a615fd33d2d13beef3ce4c63fa25e40867/huggingface_hub-1.33.0-py3-none-any.whl", hash = "sha256:04e434b06e100eddbce9a6e817d72693a7884b10a79bd67ab48080d5c07eb899", size = 846435, upload-time = "2026-09-24T09:49:28.059Z" },
+]
+
+[[package]]
+name = "hurobo"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "coacd", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "gaussian-renderer", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "gsplat", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "lerobot", extra = ["libero", "smolvla", "training"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "matplotlib", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "mediapipe", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "open3d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "opencv-contrib-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pycolmap", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pyyaml", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "scipy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ipykernel", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nbclient", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nbconvert", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "plotly", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ruff", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "coacd", specifier = ">=1.0.14" },
+    { name = "gaussian-renderer", specifier = "==0.2.0" },
+    { name = "gsplat", specifier = "==1.5.3" },
+    { name = "lerobot", extras = ["smolvla", "libero", "training"], specifier = ">=0.6.1,<0.7" },
+    { name = "matplotlib" },
+    { name = "mediapipe" },
+    { name = "open3d", specifier = ">=0.20.0" },
+    { name = "opencv-contrib-python", specifier = ">=4.10" },
+    { name = "pycolmap", specifier = ">=4.2.1" },
+    { name = "pyyaml" },
+    { name = "scipy" },
+    { name = "torch", index = "https://download.pytorch.org/whl/cu126" },
+    { name = "torchvision", index = "https://download.pytorch.org/whl/cu126" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipykernel" },
+    { name = "nbclient", specifier = ">=0.11.0" },
+    { name = "nbconvert", specifier = ">=7.17.1" },
+    { name = "plotly", specifier = ">=7.1.0" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [[package]]
