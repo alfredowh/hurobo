@@ -6,7 +6,6 @@ The robot is not teleoperated. The simulated table is a copy of the real table. 
 
 The first experiment, how to record for it and what the pipeline does with the clips: [docs/experiment_scaled_native.md](docs/experiment_scaled_native.md).
 
-The challenge brief is in [CHALLENGE.md](CHALLENGE.md). The schedule and gates are in [PLAN.md](PLAN.md). The real2sim research notes are in [REAL2SIM_IDEAS.md](REAL2SIM_IDEAS.md).
 
 ---
 
@@ -18,9 +17,9 @@ The challenge brief is in [CHALLENGE.md](CHALLENGE.md). The schedule and gates a
 
 | Constraint | Effect on the design |
 |---|---|
-| One laptop: RTX A5500 16 GB, 24 CPU threads, 62 GB RAM | Use a 450M-parameter VLA in bf16. Do not use 3B or 7B models. Use ACT as a fallback. |
+| One 16 GB GPU | Use a 450M-parameter VLA in bf16. Do not use 3B or 7B models. Use ACT as a fallback. |
 | NVIDIA driver 560.35 (CUDA 12.6 maximum) | Install PyTorch from the cu126 index. Isaac Sim 5 and PolaRiS do not work. Use MuJoCo. |
-| About 7 days. Long work days only on Friday to Sunday. | Start long jobs (generation, training) at the end of a short session. Each block has a gate and a fallback ([PLAN.md](PLAN.md) §5). |
+| About 7 days. Long work days only on Friday to Sunday. | Start long jobs (generation, training) at the end of a short session. Each block has a gate and a fallback. |
 | The data must come from me, with a phone | About 15 third-person clips on a tripod. One camera. No depth sensor. No motion-capture glove. |
 | Public repository | Do not commit large files. The repository contains scripts and a link to the dataset on the Hugging Face Hub. |
 
@@ -68,7 +67,7 @@ Collect the data in the simulator. Control the Panda with a tracked hand or with
 
 - **Distribution shift:** none for visuals. Training and test use the same renderer.
 - **Problem:** it is hard to control a 7-DoF arm precisely with a tracked hand or a keyboard. The demos are slow, jerky and few. The real recording has no role. This breaks the challenge rule that the recorded real data must be used.
-- **Status:** built as a tool (`teleop.py`, `13_teleop.py`, notebook 07). It is for validation and debugging. It is not the data source.
+- **Status:** built as a tool (`teleop.py`, `13_teleop.py`, notebook 05). It is for validation and debugging. It is not the data source.
 
 ### Solution 2: scan the real objects and add them to the simulator
 
@@ -103,13 +102,34 @@ Select ready LIBERO objects (bowl, plate). Find real objects with the same size.
 
 The baseline avoids the visual domain gap. It does not close the gap. Splat-based real2sim reduces the visual gap for illustration. A real-robot validation is outside this challenge.
 
-### Rejected storylines
+### What the splat route has produced so far
 
-| Storyline | Reason |
-|---|---|
-| Pixel-level real→sim translation (CycleGAN, diffusion) | No model exists for LIBERO assets. It cannot be built and validated from about 15 clips in the available time. Future work. |
-| World model or video-prediction planning | It needs a planner on top of the predictor. LIBERO already gives the true dynamics. No mature local inference path exists at this scale. |
-| Large VLAs (π0, OpenVLA) or world models on this laptop | 3B to 7B parameters leave no room for iteration on a 16 GB GPU. |
+All of this comes from my own phone clips of one table, one bowl and one plate. It is for looks only: it does not train or evaluate a policy. Scan details and limits: [D-001 to D-009 in the design log](docs/design_decisions.md).
+
+**The whole scene** (table, background, bowl, plate) in one splat, from two clips with a ChArUco board on a tablet as the metric frame. The animation is a camera sweep over the Gaussians, cut to the box x −0.39..1.66, y −0.79..0.61, z −2.71..1.01 m (table frame, tabletop at z = 0). The strip below compares phone photo (left) and splat render (right) from four held-out camera poses.
+
+![Sweep over the whole-scene splat](assets/scene_orbit.gif)
+
+![Held-out views, photo left, splat right](assets/scene_photo_vs_splat.png)
+
+Interactive 3D view (orbit, pan, crop box; GitHub cannot run it, so open it locally):
+
+```bash
+uv run python -c "from pathlib import Path; from hurobo.utils.viewer import write_splat_viewer; write_splat_viewer(Path('data/splats/table_zoom_02_03_scene.ply'), Path('data/viewer/table_zoom_02_03_scene'))"
+uv run python -m http.server 8791 -d data/viewer/table_zoom_02_03_scene   # then open http://localhost:8791/
+```
+
+[07_whole_scene](examples/07_whole_scene.ipynb) shows the same splat as a plotly 3D view with a layer switch (whole scene, table, background, plate, bowl) and writes the sweep above.
+
+**The scanned bowl and plate**, rendered from four sides (the plate's last row has its gaps closed with a measured shape prior, [D-009](docs/design_decisions.md); the rim and profile there come from the prior, not from the scan):
+
+![Scanned bowl and plate](assets/bowl_plate_splats.png)
+
+**Bowl and plate inside the LIBERO scene**, scaled to the measured diameters (bowl 13.8 cm, plate 25.5 cm) and composited with the mesh robot by depth. The table cloth is still LIBERO's. The splats change only the appearance; physics and collisions are LIBERO's own bodies.
+
+![Scanned bowl and plate in LIBERO](assets/libero_scanned_bowl_plate.png)
+
+Reproduce: [01_splats_and_scans](examples/01_splats_and_scans.ipynb), part 3 (needs `data/splats/` and `data/scans/` from `scripts/09_scan_object.py` and `scripts/15_scan_clips.py`, and a GPU).
 
 ---
 
@@ -129,21 +149,18 @@ The baseline avoids the visual domain gap. It does not close the gap. Splat-base
 | Collision geometry | **open3d** and **CoACD** | They convert a splat to a surface mesh and convex pieces. Scanned objects then have a solid body. |
 | Tooling | **uv**, **ruff**, **pytest**, Jupyter and **plotly** | Reproducible environment, formatting and lint, tests, interactive 3D views. |
 
-Related work: MimicGen (used as a concept), HaWoR (considered and not used, because the camera is fixed), Video2Sim2Real, Phantom, PolaRiS and RoboGSim (real2sim ideas). See [PLAN.md](PLAN.md) §2.
+Related work: MimicGen (used as a concept), HaWoR (considered and not used, because the camera is fixed), Video2Sim2Real, Phantom, PolaRiS and RoboGSim (real2sim ideas).
 
 ---
 
 ## 5. Hardware and software setup
 
-**Machine**
+**Capture hardware**
 
 | | |
 |---|---|
-| OS | Ubuntu 22.04 (kernel 6.8) |
-| GPU | NVIDIA RTX A5500 Laptop, 16 GB, driver 560.35 |
-| CPU | Intel Core i9-12950HX, 24 threads |
-| RAM | 62 GB |
-| Capture | Phone on a tripod (1080p30, stabilization off, focus and exposure locked). ChArUco board on a laptop screen or tablet. |
+| Camera | Samsung Galaxy S10e on a tripod (1080p30, stabilization off, focus and exposure locked) |
+| Recording trigger | CMF Watch Pro 2 smartwatch, to start and stop the recording |
 
 **Software**
 
@@ -173,8 +190,7 @@ Notes:
 
 ```
 hurobo/
-├── README.md  PLAN.md  CHALLENGE.md  CLAUDE.md
-├── REAL2SIM_IDEAS.md  ICL_IDEAS.md  novaflow_review.md   # research notes
+├── README.md
 ├── pyproject.toml  uv.lock  ruff.toml  .env.example
 ├── src/hurobo/
 │   ├── camera.py, camera_source.py   # intrinsics, ChArUco calibration, webcam / file / stream sources
@@ -201,7 +217,7 @@ Rules for the code:
 
 - Each module has one responsibility. Scripts only parse arguments and call objects.
 - Each pose variable has its frame in its name (`T_cam_table`, `p_tcp_table`).
-- Notebooks contain no reusable logic. See [CLAUDE.md](CLAUDE.md).
+- Notebooks contain no reusable logic.
 
 ---
 
@@ -229,9 +245,8 @@ Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started
 | Training | `05_train.sh`. ACT fallback (about 1 h), then SmolVLA fine-tune. | ⬜ |
 | Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | ⬜ |
 | Figures | GIFs, 3D trajectory plot (human TCP and robot EEF), data-multiplier curve, one failure case | ⬜ |
-| Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. Real bowl scans work with a lowered SIFT threshold and an automatic floor-based crop, checked on one object in one scene ([D-001, D-004](docs/design_decisions.md)). No table or plate scan, no ChArUco metric scan, no composite yet. |
+| Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. Real scans of the bowl, the plate and the whole table scene exist (metric ChArUco frame for the scene, [D-009](docs/design_decisions.md); lowered SIFT threshold and floor-based crop, [D-001, D-004](docs/design_decisions.md)), and the scanned bowl and plate are composited into LIBERO ([gallery](#what-the-splat-route-has-produced-so-far)). The plate has gaps; the filled version uses a shape prior. One scene, two clips each. The scene splat is not in LIBERO yet, and the collision mesh is not wired into the experiment. |
 | Stretch | Second camera view for stereo, only if monocular depth fails | ⬜ |
-| Stretch | In-context or few-step adaptation ([ICL_IDEAS.md](ICL_IDEAS.md)) | ⬜ |
 | Submission | Fresh-clone test, results table, honest "what did not work", public repository | ⬜ |
 
 If time is short, cut in this order: splat stretch, robot overlay, SmolVLA (keep ACT), data-multiplier plot. Never cut the twin side-by-side or this README.
@@ -244,21 +259,20 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 
 | Notebook | Content |
 |---|---|
-| [01_splat_viewer_3d](examples/01_splat_viewer_3d.ipynb) | Interactive 3D view of Gaussian-splat `.ply` files (own scans and DISCOVERSE assets). Rendered orbit views. |
-| [02_scan_pipeline](examples/02_scan_pipeline.ipynb) | Orbit video → COLMAP cameras and sparse points → object frame. Photo and splat comparison. Rendered splat orbit. |
-| [03_splat_composite](examples/03_splat_composite.ipynb) | Splats composited into LIBERO by depth. Splats follow moved bodies. |
-| [04_frames_and_calibration](examples/04_frames_and_calibration.ipynb) | Frame conventions, intrinsics → MuJoCo FOV, ChArUco board, on-screen marker sheet, grasp segmentation. |
-| [05_hand_tracking](examples/05_hand_tracking.ipynb) | MediaPipe + PnP hand TCP, pinch-aperture step-through, ArUco poses against ground truth, `DemoExtractor` QC report. |
-| [06_lerobot_recording](examples/06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload: schema, video, state and action, sidecar file. |
-| [07_teleop](examples/07_teleop.ipynb) | Hand-clip teleoperation of the LIBERO Panda: table-to-world mapping, tracking error, cube spawned on grasp, scripted keyboard control. |
-| [10_scaled_native_experiment](examples/10_scaled_native_experiment.ipynb) | Experiment E1: real-size bowl and plate in LIBERO, the recording plan (phone pose, layouts, markers, commands), human demo to robot demo from the home pose, success rate of retargeted rollouts. Hand input is made up. |
-| [08_scan_parameter_sweep](examples/08_scan_parameter_sweep.ipynb) | How SfM settings, matching mode, keyframe spacing and training length change a real phone scan (registration, orbit coverage, held-out PSNR), and three ways of cropping the object compared against an independent reference. Real clip, not committed. |
+| [01_splats_and_scans](examples/01_splats_and_scans.ipynb) | Splats end to end: interactive 3D view, scan pipeline (orbit video → COLMAP → object frame, best scans), splats composited into LIBERO by depth. |
+| [02_frames_and_calibration](examples/02_frames_and_calibration.ipynb) | Frame conventions, intrinsics → MuJoCo FOV, ChArUco board, on-screen marker sheet, grasp segmentation. |
+| [03_hand_tracking](examples/03_hand_tracking.ipynb) | MediaPipe + PnP hand TCP, pinch-aperture step-through, ArUco poses against ground truth, `DemoExtractor` QC report. |
+| [04_lerobot_recording](examples/04_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload: schema, video, state and action, sidecar file. |
+| [05_teleop](examples/05_teleop.ipynb) | Hand-clip teleoperation of the LIBERO Panda: table-to-world mapping, tracking error, cube spawned on grasp, scripted keyboard control. |
+| [06_scan_parameter_sweep](examples/06_scan_parameter_sweep.ipynb) | How SfM settings, matching mode, keyframe spacing and training length change a real phone scan (registration, orbit coverage, held-out PSNR), and three ways of cropping the object compared against an independent reference. Real clip, not committed. |
+| [07_whole_scene](examples/07_whole_scene.ipynb) | The whole table scan merged into one splat: interactive 3D view with a layer switch, photo and splat renders from the phone's camera path, a browser viewer with a crop box, still 3D views of the cut scene and the README sweep. |
+| [08_scaled_native_experiment](examples/08_scaled_native_experiment.ipynb) | Experiment E1: real-size bowl and plate in LIBERO, the recording plan (phone pose, layouts, markers, commands), human demo to robot demo from the home pose, success rate of retargeted rollouts. Hand input is made up. |
 
-Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebook 08 is the exception and reads results from a real phone clip of a bowl. Each notebook states this in its introduction.
+Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebook 06 is the exception and reads results from a real phone clip of a bowl. Each notebook states this in its introduction.
 
 ```bash
 uv run jupyter lab examples/
-MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace examples/01_splat_viewer_3d.ipynb
+MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace examples/01_splats_and_scans.ipynb
 ```
 
 ---

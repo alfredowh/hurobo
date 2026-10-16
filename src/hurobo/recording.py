@@ -41,7 +41,7 @@ class RecordingSpec:
 
     bowl_marker_id: int = 21
     plate_marker_id: int = 22
-    marker_length_m: float = 0.06
+    marker_length_m: float = 0.0575
     pad_marker_to_bowl_m: float = 0.115
     pinch_below_rim_m: float = 0.012
 
@@ -80,6 +80,7 @@ def extract_board_clip(
     setup: RealSetup,
     spec: RecordingSpec | None = None,
     segmenter: GraspSegmenter | None = None,
+    window_s: tuple[float, float] | None = None,
 ) -> tuple[HumanDemo, ClipReport]:
     """One phone clip to a table-frame `HumanDemo`, with the board as the table frame.
 
@@ -89,6 +90,7 @@ def extract_board_clip(
         setup: measured real setup (board, bowl height).
         spec: markers; defaults to `RecordingSpec()`.
         segmenter: pinch thresholds; defaults to 3 cm close, 5 cm open.
+        window_s: (start, end) clip times to keep (the cleaning step's cut); the whole clip if None.
 
     Returns:
         (demo, report); check `report.usable` before using the demo.
@@ -101,6 +103,7 @@ def extract_board_clip(
         segmenter,
         spec.extraction_config(setup),
         marker_estimator=spec.estimator(intrinsics, setup),
+        window_s=window_s,
     )
 
 
@@ -396,7 +399,7 @@ class CaptureDiagnosis:
         for index, (frame, _) in enumerate(read_frames_with_timestamps(self.video)):
             if index not in wanted:
                 continue
-            self._draw_detections(frame, index, 1.0)
+            self.draw_detections(frame, index, 1.0)
             missing = [
                 name for name, marker_id in expected.items() if marker_id not in self.marker_ids[index]
             ]
@@ -410,7 +413,13 @@ class CaptureDiagnosis:
             )
         return {label: panels[label] for label in indices if label in panels}
 
-    def write_video(self, out_path: Path, width_px: int = 960) -> Path:
+    def write_video(
+        self,
+        out_path: Path,
+        width_px: int = 960,
+        window_s: tuple[float, float] | None = None,
+        only_window: bool = False,
+    ) -> Path:
         """Diagnostic video: every frame with what was detected drawn on it and what is missing flagged.
 
         Marker outlines carry their role (bowl pad, plate marker, board), the hand skeleton is drawn when
@@ -420,6 +429,9 @@ class CaptureDiagnosis:
         Args:
             out_path: output .mp4; the parent folder is created.
             width_px: output width; the height keeps the aspect ratio.
+            window_s: the clip's cut (start, end in clip time): frames outside it are dimmed and labelled
+                "REMOVED BY CUT", and the kept range is marked on the timeline strip.
+            only_window: write only the frames inside `window_s` (the cleaned clip).
 
         Returns:
             `out_path`.
@@ -427,13 +439,19 @@ class CaptureDiagnosis:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         writer = None
         try:
-            for index, (frame, _) in enumerate(read_frames_with_timestamps(self.video)):
+            for index, (frame, t_s) in enumerate(read_frames_with_timestamps(self.video)):
+                kept = window_s is None or window_s[0] <= t_s <= window_s[1]
+                if only_window and not kept:
+                    continue
                 scale = width_px / frame.shape[1]
                 frame = cv2.resize(
                     frame, (width_px, round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA
                 )
-                self._draw_detections(frame, index, scale)
-                self._draw_status(frame, index)
+                self.draw_detections(frame, index, scale)
+                self._draw_status(frame, index, window_s)
+                if not kept:
+                    frame[:] = (frame * 0.45).astype(np.uint8)
+                    draw_outlined_text(frame, "REMOVED BY CUT", (frame.shape[1] // 2 - 110, 100), 0.9)
                 if writer is None:
                     writer = VideoWriter(
                         out_path, get_video_fps(self.video), (frame.shape[1], frame.shape[0])
@@ -451,7 +469,7 @@ class CaptureDiagnosis:
             self.spec.plate_marker_id: ("plate marker", (255, 0, 255)),
         }
 
-    def _draw_detections(self, frame_bgr: np.ndarray, index: int, scale: float) -> None:
+    def draw_detections(self, frame_bgr: np.ndarray, index: int, scale: float) -> None:
         """Marker outlines (coloured by role) and the hand skeleton on a frame, in place.
 
         Args:
@@ -475,8 +493,13 @@ class CaptureDiagnosis:
         if self.hand_landmarks_px[index] is not None:
             draw_hand_skeleton(frame_bgr, self.hand_landmarks_px[index] * scale)
 
-    def _draw_status(self, frame_bgr: np.ndarray, index: int) -> None:
-        """Status panel, a red banner when the hand is lost, and the timeline strip, in place."""
+    def _draw_status(
+        self, frame_bgr: np.ndarray, index: int, window_s: tuple[float, float] | None = None
+    ) -> None:
+        """Status panel, a red banner when the hand is lost, and the timeline strip, in place.
+
+        With `window_s`, a bar above the strip marks the kept range.
+        """
         height, width = frame_bgr.shape[:2]
         aperture = self.aperture_m[index]
         if np.isnan(aperture):
@@ -516,6 +539,9 @@ class CaptureDiagnosis:
         for lane, found in enumerate(lanes):
             strip = np.where(found[columns, None], np.array([0, 160, 0]), np.array([0, 0, 200]))
             frame_bgr[top + lane * lane_h : top + (lane + 1) * lane_h] = strip.astype(np.uint8)[None]
+        if window_s is not None:
+            x0, x1 = (int(np.searchsorted(self.times_s, t) * width // len(self.times_s)) for t in window_s)
+            cv2.rectangle(frame_bgr, (x0, top - 8), (x1, top - 4), (0, 220, 255), -1)
         cursor = index * width // len(self.times_s)
         cv2.line(frame_bgr, (cursor, top - 4), (cursor, height - 1), (255, 255, 255), 2)
 
@@ -583,7 +609,7 @@ def session_commands(
     out_dir: Path = Path("data/raw/e1"),
     work_dir: Path = Path("data/e1"),
     setup_path: Path = Path("data/raw/setup_01/measurements.yaml"),
-    intrinsics_path: Path = Path("data/camera_intrinsics_s24.npz"),
+    intrinsics_path: Path = Path("data/camera_intrinsics_s10e.npz"),
     clips: int = 20,
     generated: int = 200,
 ) -> list[tuple[str, str]]:
@@ -613,22 +639,29 @@ def session_commands(
             f"--intrinsics {intrinsics_path}",
         ),
         (
-            "3. after recording: human clips to table-frame demos + QC report",
-            f"uv run python scripts/02_extract_demos.py {out_dir}/clip_*.mp4 --setup {setup_path} "
-            f"--intrinsics {intrinsics_path} --out {demos}",
+            "3. clean the clips: propose a cut per clip (one hand, one close-open cycle), then review them",
+            f"uv run python scripts/20_clean_clips.py {out_dir} --setup {setup_path} "
+            f"--intrinsics {intrinsics_path}\n"
+            f"uv run python scripts/21_clip_cutter.py {out_dir} --setup {setup_path} "
+            f"--intrinsics {intrinsics_path}",
         ),
         (
-            "4. optional: the human dataset in LeRobot format (what you recorded, for the record)",
+            "4. after recording: human clips to table-frame demos + QC report (inside the cuts)",
+            f"uv run python scripts/02_extract_demos.py {out_dir}/clip_*.mp4 --setup {setup_path} "
+            f"--intrinsics {intrinsics_path} --cuts {out_dir}/cuts.json --out {demos}",
+        ),
+        (
+            "5. optional: the human dataset in LeRobot format (what you recorded, for the record)",
             f"uv run python scripts/11_export_human_dataset.py {demos} "
             f"--intrinsics {intrinsics_path} --out {work_dir}/human",
         ),
         (
-            "5. replay every demo on the robot, from the home pose, in the scaled scene (videos)",
+            "6. replay every demo on the robot, from the home pose, in the scaled scene (videos)",
             f"MUJOCO_GL=egl uv run python scripts/03_replay.py {demos} --setup {setup_path} "
             f"--out {work_dir}/replay",
         ),
         (
-            "6. generate the robot dataset (successful rollouts on new layouts)",
+            "7. generate the robot dataset (successful rollouts on new layouts)",
             f"MUJOCO_GL=egl uv run python scripts/04_generate_dataset.py {demos} --setup {setup_path} "
             f"--count {generated} --out {generated_dir}",
         ),

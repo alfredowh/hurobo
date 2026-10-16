@@ -175,6 +175,29 @@ class VideoWriter:
         self.close()
 
 
+def save_gif(frames: list[np.ndarray], path: Path, fps: float = 12.0, boomerang: bool = True) -> Path:
+    """Write RGB frames as a looping GIF (README media, where an MP4 does not autoplay).
+
+    Args:
+        frames: (H, W, 3) uint8 RGB images of equal size.
+        path: output `.gif`; parent folders are created.
+        fps: playback rate.
+        boomerang: append the frames in reverse so a camera sweep loops without a jump.
+
+    Returns:
+        `path`.
+    """
+    from PIL import Image
+
+    sequence = frames + frames[-2:0:-1] if boomerang else frames
+    path.parent.mkdir(parents=True, exist_ok=True)
+    images = [Image.fromarray(frame) for frame in sequence]
+    images[0].save(
+        path, save_all=True, append_images=images[1:], duration=round(1000 / fps), loop=0, optimize=True
+    )
+    return path
+
+
 def hstack_resized(frames: list[np.ndarray], target_height: int = 480) -> np.ndarray:
     """Scale frames to a common height (keeping aspect ratios) and join them left to right.
 
@@ -331,6 +354,49 @@ def write_tcp_overlay_video(
     return video_path
 
 
+def draw_gripper_gauge(
+    frame_bgr: np.ndarray,
+    aperture_m: float,
+    grasping: bool,
+    origin_px: tuple[int, int],
+    max_aperture_m: float = 0.12,
+    width_px: int = 150,
+) -> None:
+    """Draws a two-finger gripper symbol whose gap follows the pinch aperture, in place.
+
+    Args:
+        frame_bgr: image to draw on.
+        aperture_m: thumb-index distance; the gap is drawn to scale up to `max_aperture_m`.
+        grasping: hysteresis-thresholded grasp state; the fingers are red when closed, green when open.
+        origin_px: top-left corner of the symbol.
+        max_aperture_m: aperture that fills `width_px`.
+        width_px: width of the symbol.
+    """
+    x0, y0 = origin_px
+    gap = round(width_px * min(max(aperture_m, 0.0) / max_aperture_m, 1.0))
+    finger_w, finger_h = 14, 46
+    centre = x0 + width_px // 2
+    colour = (0, 0, 230) if grasping else (0, 200, 0)
+    cv2.rectangle(frame_bgr, (x0 - 6, y0 - 8), (x0 + width_px + 6, y0 + finger_h + 30), (30, 30, 30), -1)
+    cv2.rectangle(
+        frame_bgr, (centre - gap // 2 - finger_w, y0), (centre - gap // 2, y0 + finger_h), colour, -1
+    )
+    cv2.rectangle(
+        frame_bgr, (centre + gap // 2, y0), (centre + gap // 2 + finger_w, y0 + finger_h), colour, -1
+    )
+    label = f"{'CLOSED' if grasping else 'open'}  {100 * aperture_m:.1f} cm"
+    cv2.putText(
+        frame_bgr,
+        label,
+        (x0, y0 + finger_h + 22),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+
 def draw_outlined_text(
     image_bgr: np.ndarray,
     text: str,
@@ -481,6 +547,128 @@ class FrameReel:
             )
         flow_ab, flow_ba = self._flows[left]
         return interpolate_frames(self._frames[left], self._frames[right], alpha, flow_ab, flow_ba)
+
+
+def write_side_by_side_video(
+    left_path: Path,
+    right_path: Path,
+    out_path: Path,
+    labels: tuple[str, str],
+    fps: float = 20.0,
+    height: int = 480,
+) -> Path:
+    """Two videos side by side on one clock; the shorter one holds its last frame.
+
+    Args:
+        left_path: video shown on the left.
+        right_path: video shown on the right.
+        out_path: output .mp4 (H.264); the parent folder is created.
+        labels: captions of the left and right video.
+        fps: output rate; the longer video sets the duration.
+        height: output height in pixels.
+
+    Returns:
+        `out_path`.
+    """
+    reels = [FrameReel.from_video(path) for path in (left_path, right_path)]
+    duration_s = max(reel.duration_s for reel in reels)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    frames = hstack_resized(
+        [reels[0].frame_at(reels[0].start_s), reels[1].frame_at(reels[1].start_s)], height
+    )
+    with VideoWriter(out_path, fps, (frames.shape[1], frames.shape[0])) as writer:
+        for t_s in np.arange(0.0, duration_s, 1.0 / fps):
+            panels = [reel.frame_at(reel.start_s + t_s, interpolate=False).copy() for reel in reels]
+            for panel, label, reel in zip(panels, labels, reels, strict=True):
+                ended = t_s > reel.duration_s
+                draw_outlined_text(
+                    panel, f"{label}{' (ended)' if ended else ''}", (10, panel.shape[0] - 14), 0.8
+                )
+            frame = hstack_resized(panels, height)
+            draw_outlined_text(
+                frame, f"t = {t_s:.1f} s", (frame.shape[1] // 2 - 50, frame.shape[0] - 14), 0.8
+            )
+            writer.write(frame)
+    return out_path
+
+
+def write_phase_aligned_video(
+    left_path: Path,
+    right_path: Path,
+    out_path: Path,
+    labels: tuple[str, str],
+    left_events_s: list[float],
+    right_events_s: list[float],
+    fps: float = 20.0,
+    height: int = 480,
+    play_on_after_last_event: bool = False,
+    slowdowns: tuple[float, float] = (1.0, 1.0),
+    pause_faster: bool = False,
+) -> Path:
+    """Two videos side by side with their event boundaries lined up.
+
+    Between two consecutive events the output lasts as long as the slower side needs. By default the faster
+    side is slowed to fit; with `pause_faster` it plays at its own speed and then waits (holds its last frame
+    of the segment) until the other side reaches the event. The speed of each side is drawn on it.
+
+    Args:
+        left_path: video shown on the left.
+        right_path: video shown on the right.
+        out_path: output .mp4 (H.264); the parent folder is created.
+        labels: captions of the left and right video.
+        left_events_s: increasing times in the left video (its own clock, from 0), one per shared event,
+            first = 0. Equal consecutive times mean the video waits there (e.g. while the other moves).
+        right_events_s: the same events in the right video; same length as `left_events_s`.
+        fps: output rate.
+        height: output height in pixels.
+        play_on_after_last_event: after the last event both videos play at their own speed until the longer
+            one ends, the shorter holding its last frame; the events then need not end at the videos'
+            durations, which lets only the start of a clip be aligned.
+        slowdowns: how many times slower than recorded each side plays (the human clip slowed to the
+            robot's speed limit is `(factor, 1.0)`).
+        pause_faster: see above.
+
+    Returns:
+        `out_path`.
+    """
+    if len(left_events_s) != len(right_events_s) or len(left_events_s) < 2:
+        raise ValueError("need the same number (>= 2) of events for both videos")
+    reels = [FrameReel.from_video(path) for path in (left_path, right_path)]
+    events = (np.asarray(left_events_s, dtype=float), np.asarray(right_events_s, dtype=float))
+    needed = [np.diff(marks) * slowdown for marks, slowdown in zip(events, slowdowns, strict=True)]
+    lengths = np.maximum(needed[0], needed[1]).clip(min=1e-6)
+    starts = np.concatenate([[0.0], np.cumsum(lengths)])
+    tail_s = max(
+        (reel.duration_s - marks[-1]) * slowdown
+        for reel, marks, slowdown in zip(reels, events, slowdowns, strict=True)
+    )
+    total_s = starts[-1] + (max(tail_s, 0.0) if play_on_after_last_event else 0.0)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    first = hstack_resized([reel.frame_at(reel.start_s) for reel in reels], height)
+    with VideoWriter(out_path, fps, (first.shape[1], first.shape[0])) as writer:
+        for t_s in np.arange(0.0, total_s, 1.0 / fps):
+            in_tail = t_s >= starts[-1]
+            segment = min(int(np.searchsorted(starts, t_s, side="right")) - 1, len(lengths) - 1)
+            panels = []
+            for reel, label, marks, slowdown in zip(reels, labels, events, slowdowns, strict=True):
+                if in_tail:
+                    own_t, speed = marks[-1] + (t_s - starts[-1]) / slowdown, 1.0 / slowdown
+                else:
+                    elapsed = t_s - starts[segment]
+                    own_s = marks[segment + 1] - marks[segment]
+                    if pause_faster:
+                        progress_s = min(elapsed / slowdown, own_s)
+                        speed = 0.0 if progress_s >= own_s else 1.0 / slowdown
+                    else:
+                        progress_s = elapsed / lengths[segment] * own_s
+                        speed = own_s / lengths[segment]
+                    own_t = marks[segment] + progress_s
+                panel = reel.frame_at(reel.start_s + own_t, interpolate=False).copy()
+                note = f"x{speed:.2f}" if speed > 0 else "paused"
+                draw_outlined_text(panel, f"{label}  ({note})", (10, panel.shape[0] - 14), 0.8)
+                panels.append(panel)
+            writer.write(hstack_resized(panels, height))
+    return out_path
 
 
 def slow_down_video(source_path: Path, output_path: Path, factor: float, output_fps: float = 20.0) -> Path:

@@ -144,18 +144,26 @@ class DemoExtractor:
         self._segmenter = segmenter
         self._config = config or ExtractionConfig()
 
-    def extract_video(self, video_path: Path) -> tuple[HumanDemo, ClipReport]:
+    def extract_video(
+        self, video_path: Path, window_s: tuple[float, float] | None = None
+    ) -> tuple[HumanDemo, ClipReport]:
         """Extract a demo from a video file. See `extract_frames`."""
-        return self.extract_frames(read_frames_with_timestamps(video_path), video_path)
+        return self.extract_frames(read_frames_with_timestamps(video_path), video_path, window_s)
 
     def extract_frames(
-        self, frames: Iterable[tuple[np.ndarray, float]], source_video: Path
+        self,
+        frames: Iterable[tuple[np.ndarray, float]],
+        source_video: Path,
+        window_s: tuple[float, float] | None = None,
     ) -> tuple[HumanDemo, ClipReport]:
         """Extract a demo from (BGR frame, time in s) pairs.
 
         Args:
             frames: frames in time order with strictly increasing timestamps.
             source_video: recorded in the demo and report for traceability.
+            window_s: (start, end) clip times to keep for the hand trajectory (see `hurobo.clip_clean`);
+                all frames if None. The table pose and the bowl/plate layout still come from the clip's own
+                first frames, before the hand moves anything, whatever the window.
 
         Returns:
             (demo, report). Check `report.usable` before using the demo.
@@ -171,18 +179,25 @@ class DemoExtractor:
         t_cam_table_all: list[np.ndarray] = []
         layout_poses: dict[str, list[np.ndarray]] = {}
         last_ms = -1
+        clip_start_s = None
         for frame, t_s in frames:
-            times_s.append(t_s)
-            last_ms = max(int(round(t_s * 1000)), last_ms + 1)
-            hand = self._tracker.process_frame(frame, last_ms)
-            tcp_cam.append(hand.tcp_pos_cam if hand else np.full(3, np.nan))
-            aperture.append(hand.pinch_aperture_m if hand else np.nan)
+            clip_start_s = t_s if clip_start_s is None else clip_start_s
+            in_window = window_s is None or window_s[0] <= t_s <= window_s[1]
+            in_layout_window = t_s - clip_start_s <= cfg.layout_window_s
+            if not (in_window or in_layout_window):
+                continue
+            if in_window:
+                times_s.append(t_s)
+                last_ms = max(int(round(t_s * 1000)), last_ms + 1)
+                hand = self._tracker.process_frame(frame, last_ms)
+                tcp_cam.append(hand.tcp_pos_cam if hand else np.full(3, np.nan))
+                aperture.append(hand.pinch_aperture_m if hand else np.nan)
 
             poses = self._markers.estimate(frame)
             if poses is None:
                 continue
             t_cam_table_all.append(poses["table"])
-            if t_s - times_s[0] <= cfg.layout_window_s:
+            if in_layout_window:
                 for role, t_table_role in poses.items():
                     if role != "table":
                         layout_poses.setdefault(role, []).append(t_table_role)
@@ -385,6 +400,7 @@ def extract_demo(
     segmenter: GraspSegmenter | None = None,
     config: ExtractionConfig | None = None,
     marker_estimator: MarkerEstimator | None = None,
+    window_s: tuple[float, float] | None = None,
 ) -> tuple[HumanDemo, ClipReport]:
     """Extract one clip with the standard MediaPipe + ArUco perception stack.
 
@@ -399,6 +415,7 @@ def extract_demo(
         config: QC gates; defaults to `ExtractionConfig()`.
         marker_estimator: replaces the single-table-marker estimator built from `layout`, e.g. a
             `BoardMarkerPoseEstimator` that takes the table frame from a ChArUco board.
+        window_s: (start, end) clip times to keep, from `hurobo.clip_clean`; the whole clip if None.
 
     Returns:
         The demo and its quality report.
@@ -413,4 +430,4 @@ def extract_demo(
             segmenter or GraspSegmenter(0.03, 0.05),
             config,
         )
-        return extractor.extract_video(video_path)
+        return extractor.extract_video(video_path, window_s)

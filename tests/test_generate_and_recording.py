@@ -74,6 +74,7 @@ def test_session_commands_are_ordered_and_use_the_given_paths() -> None:
     assert scripts == [
         "16_plan_recording",
         "17_check_capture",
+        "20_clean_clips",
         "02_extract_demos",
         "11_export_human_dataset",
         "03_replay",

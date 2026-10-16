@@ -19,6 +19,7 @@ from hurobo.utils.hand_landmarks import INDEX_TIP, LANDMARK_NAMES, THUMB_TIP, po
 
 if TYPE_CHECKING:
     from hurobo.capture_plan import CameraPlacement, PlannedClip
+    from hurobo.clip_clean import ClipCleaner, ClipCut, ClipSignals
     from hurobo.hand import TrackedFrame
     from hurobo.real_setup import RealSetup
     from hurobo.recording import CaptureDiagnosis
@@ -1183,6 +1184,58 @@ def capture_diagnosis_figure(diagnosis: CaptureDiagnosis, title: str | None = No
     figure.update_layout(
         title=title or f"Capture check: {diagnosis.video.name}",
         height=760,
+        margin={"l": 40, "r": 10, "t": 80, "b": 40},
+    )
+    return figure
+
+
+def clip_cut_figure(
+    signals: ClipSignals, cleaner: ClipCleaner, cut: ClipCut, title: str | None = None
+) -> go.Figure:
+    """A clip's per-frame filter results and pinch with the kept stretch highlighted.
+
+    Top: one lane per frame filter (a bar where the frame is rejected for that reason) and the pinch-closed
+    lane. Bottom: the thumb-index distance with the close and open thresholds. Shaded: what the cut removes.
+
+    Args:
+        signals: output of `ClipAnalyzer.analyze`.
+        cleaner: gives the filters and the pinch thresholds.
+        cut: the decision to draw (a proposal or a stored cut).
+        title: figure title; defaults to the clip name and the verdict.
+    """
+    from hurobo.clip_clean import FrameFilter
+
+    t = signals.times_s
+    lanes = {**FrameFilter(cleaner.config).flags(signals), "pinch closed": cleaner.closed_signal(signals)}
+    figure = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45], vertical_spacing=0.07,
+        subplot_titles=("frames rejected by each filter, and the pinch state", "pinch aperture (cm)"),
+    )  # fmt: skip
+    for level, (name, mask) in enumerate(lanes.items()):
+        colour = "darkorange" if name == "pinch closed" else "crimson"
+        figure.add_trace(
+            go.Scatter(
+                x=t[mask], y=np.full(mask.sum(), level), mode="markers", name=name, showlegend=False,
+                marker={"symbol": "square", "size": 6, "color": colour},
+                hovertemplate="%{x:.2f} s<extra>" + name + "</extra>",
+            ),
+            row=1, col=1,
+        )  # fmt: skip
+    figure.update_yaxes(tickvals=list(range(len(lanes))), ticktext=list(lanes), row=1, col=1)
+    figure.add_trace(
+        go.Scatter(x=t, y=signals.aperture_m * 100, mode="lines", showlegend=False), row=2, col=1
+    )
+    for threshold in (cleaner.segmenter.close_threshold_m, cleaner.segmenter.open_threshold_m):
+        figure.add_hline(y=100 * threshold, line_dash="dash", line_color="grey", row=2, col=1)
+    start, end = cut.window_s or (t[0], t[0])  # a rejected clip without a window removes everything
+    for x0, x1 in ((t[0], start), (end, t[-1])):
+        for row in (1, 2):
+            figure.add_vrect(x0=x0, x1=x1, fillcolor="black", opacity=0.18, line_width=0, row=row, col=1)
+    verdict = "kept" if cut.accepted else "rejected: " + "; ".join(cut.reasons)
+    figure.update_xaxes(title_text="time (s)", row=2, col=1)
+    figure.update_layout(
+        title=title or f"{signals.video.name}: {verdict}",
+        height=520,
         margin={"l": 40, "r": 10, "t": 80, "b": 40},
     )
     return figure

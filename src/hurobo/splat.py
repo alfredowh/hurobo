@@ -382,6 +382,72 @@ def render_splat_views(
     return images
 
 
+def pinhole_intrinsics(width: int, height: int, fov_deg: float) -> np.ndarray:
+    """3x3 pinhole intrinsics with the principal point at the image centre.
+
+    Args:
+        width: image width in pixels.
+        height: image height in pixels.
+        fov_deg: horizontal field of view in degrees.
+
+    Returns:
+        (3, 3) float camera matrix.
+    """
+    focal = (width / 2) / np.tan(np.radians(fov_deg / 2))
+    return np.array([[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1.0]])
+
+
+def arc_eyes(
+    target_world: np.ndarray, radius: float, height: float, azimuth_range_deg: tuple[float, float], num: int
+) -> list[np.ndarray]:
+    """Camera positions on a horizontal arc around a point, for a sweep that stays on the scanned side.
+
+    Args:
+        target_world: arc centre (the point the cameras look at).
+        radius: horizontal distance from the centre.
+        height: camera height above the centre.
+        azimuth_range_deg: first and last azimuth, measured from +x towards +y.
+        num: number of positions.
+
+    Returns:
+        `num` positions in the target's frame.
+    """
+    azimuths = np.radians(np.linspace(*azimuth_range_deg, num))
+    offsets = np.stack([radius * np.cos(azimuths), radius * np.sin(azimuths), np.full(num, height)], axis=1)
+    return [np.asarray(target_world) + offset for offset in offsets]
+
+
+def render_scene_views(
+    ply_path: Path,
+    eyes_world: list[np.ndarray],
+    target_world: np.ndarray,
+    width: int = 960,
+    height: int = 600,
+    fov_deg: float = 55.0,
+) -> list[np.ndarray]:
+    """Render a whole-scene splat from chosen viewpoints looking at one point, like the browser viewer.
+
+    Args:
+        ply_path: scene splat, z up (the table frame for the scans).
+        eyes_world: camera positions in the splat's frame.
+        target_world: the point every camera looks at.
+        width: image width in pixels.
+        height: image height in pixels.
+        fov_deg: horizontal field of view in degrees.
+
+    Returns:
+        One (height, width, 3) uint8 RGB image per eye.
+    """
+    k = pinhole_intrinsics(width, height, fov_deg)
+    return render_splat_views(
+        ply_path,
+        [look_at_t_cam_world(np.asarray(eye), np.asarray(target_world)) for eye in eyes_world],
+        [k] * len(eyes_world),
+        width,
+        height,
+    )
+
+
 def render_scan_path(
     ply_path: Path, sfm: SfmResult, similarity: Similarity, num_views: int = 12
 ) -> tuple[list[int], list[np.ndarray], list[np.ndarray]]:

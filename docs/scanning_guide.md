@@ -19,7 +19,7 @@ sim without extra alignment.
 > trusting the scale. The single-object
 > mode has run on a stock turntable clip and on two real phone clips of a bowl on a wooden floor. Those clips
 > are where the capture advice below comes from: see [design_decisions.md](design_decisions.md) (D-001, D-004)
-> and `examples/08_scan_parameter_sweep.ipynb`.
+> and `examples/06_scan_parameter_sweep.ipynb`.
 
 ---
 
@@ -43,7 +43,7 @@ clips that worked: the board filled a few hundred pixels (close, nearly top-down
 - Keep the board **large in the frame** (film from 30 to 50 cm) and not seen at a grazing angle in most frames.
 - Measure one square and one marker **on the screen** with a ruler, never zoom afterwards, pass them as
   `--square-length` and `--marker-length`, and pass the tablet's thickness as `--board-thickness`.
-- Test a clip before scanning it: `hurobo.scan.board_visibility` (example in `examples/08_scan_parameter_sweep.ipynb`, part 4).
+- Test a clip before scanning it: `hurobo.scan.board_visibility` (example in `examples/06_scan_parameter_sweep.ipynb`, part 4).
 
 ### Software check (once)
 ```bash
@@ -199,7 +199,7 @@ bowl_alone.ply          cropped to the object (floor included)
 bowl_alone_object.ply   the object alone: floor removed, upright, base at z = 0 (needs a fitted floor)
 ```
 Attach `bowl_alone_object.ply` with `SplatFit.MATCH_BODY_XY` (its scale is arbitrary), e.g.
-`build_assets(bowl_ply=Path("data/splats/bowl_alone_object.ply"))` in `examples/03_splat_composite.ipynb`.
+`build_assets(bowl_ply=Path("data/splats/bowl_alone_object.ply"))` in `examples/01_splats_and_scans.ipynb`.
 and prints how the crop was chosen. In order: `--crop X Y R` if you gave it; the floor-plane + cluster estimate
 (an object standing on a floor or table); otherwise the old percentile fit, which assumes the SfM points sit on
 the object (a turntable on a plain backdrop). `--holdout-every 10` withholds every 10th keyframe from training
@@ -210,7 +210,7 @@ To change only the crop, without re-running SfM or training:
 uv run python scripts/09_scan_object.py data/raw/bowl_alone.mp4 --name bowl_alone --recrop --crop 0.1 0.5 2.7
 ```
 Units are the splat's own (SfM) units; pick the centre and radius with `crop_figure` in
-`examples/08_scan_parameter_sweep.ipynb`.
+`examples/06_scan_parameter_sweep.ipynb`.
 
 ### 5d. Optional collision shape for an object
 ```bash
@@ -233,7 +233,7 @@ uv run python scripts/10_build_collider.py --ply data/splats/real_bowl.ply --nam
    - Corner RMS above ~5 mm: the board was curled, mis-measured, or seen in too few views. Re-film or re-print.
 2. **Open the preview** `data/scans/real/preview_photo_vs_splat.png`. Splat should resemble the photo; fuzzy
    floaters near the camera tracks are normal, large holes are not.
-3. **Look at it in 3D**: open `examples/01_splat_viewer_3d.ipynb` and point it at `data/splats/real_*.ply`.
+3. **Look at it in 3D**: open `examples/01_splats_and_scans.ipynb` and point it at `data/splats/real_*.ply`.
    Check: the table is flat at z = 0, the bowl sits on it, and the background sits outside the cylinder.
 4. **Composite into the sim** (the real test):
    ```bash
@@ -244,7 +244,7 @@ uv run python scripts/10_build_collider.py --ply data/splats/real_bowl.ply --nam
 The PSNR printed at the end is measured on the training views unless you passed `--holdout-every`, so it is
 optimistic. PSNR is also only measured on frames that registered: a reconstruction that covers a short arc can
 score well. Look at the registered fraction and how much of the orbit is covered
-(`examples/08_scan_parameter_sweep.ipynb`) before the PSNR.
+(`examples/06_scan_parameter_sweep.ipynb`) before the PSNR.
 
 ---
 

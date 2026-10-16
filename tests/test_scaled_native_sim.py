@@ -53,3 +53,11 @@ def test_a_retargeted_demo_places_the_scaled_bowl_on_the_scaled_plate(scene: Sca
     for _ in steps:
         pass
     assert executor.result.success, executor.result.failure
+
+
+def test_clamped_demo_layout_stays_in_the_work_area(scene: ScaledNativeScene) -> None:
+    far = SimLayout(bowl_xy=np.array([0.5, 0.9]), plate_xy=np.array([-0.5, -0.9]))
+    workspace = scene.workspace
+    assert not workspace.contains(far.bowl_xy)
+    assert workspace.contains(workspace.clamp(far.bowl_xy))
+    assert np.allclose(workspace.clamp(workspace.centre), workspace.centre)

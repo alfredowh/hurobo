@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip cutter</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #fff; --ink: #1c2330; --muted: #6a7384; --line: #d9dde5;
+    --ok: #1f9d55; --bad: #d64545; --warn: #d98a00; --accent: #2f6fed; --handle: #2f6fed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --panel: #1d2128; --ink: #e8ebf0; --muted: #98a2b3; --line: #343a45; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header input[type=text] { flex: 1; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+  button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary kbd { color: var(--ink); }
+  main { display: grid; grid-template-columns: 280px 1fr; gap: 12px; padding: 12px 16px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  #list { max-height: 78vh; overflow: auto; padding: 4px; }
+  .clip { display: block; width: 100%; text-align: left; border: 0; border-radius: 6px; padding: 7px 8px; background: none; }
+  .clip.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .clip small { color: var(--muted); display: block; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+  #stage { position: relative; width: 100%; background: #000; border-radius: 6px; overflow: hidden; }
+  #stage video { display: block; width: 100%; height: auto; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .chip { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; background: var(--bg); }
+  .chip.ok { border-color: var(--ok); color: var(--ok); } .chip.bad { border-color: var(--bad); color: var(--bad); }
+  #timeline { width: 100%; height: 250px; display: block; cursor: ew-resize; border-radius: 6px; background: var(--bg); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  .row label { color: var(--muted); }
+  input[type=number] { width: 84px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+  input[type=range] { flex: 1; min-width: 160px; }
+  #notes { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+  #notes li.reason { color: var(--bad); }
+  #message { color: var(--muted); margin-left: 8px; }
+  kbd { padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; background: var(--bg); }
+</style>
+</head>
+<body>
+<header>
+  <strong>Clip cutter</strong>
+  <input id="location" type="text" placeholder="folder, glob (data/raw/e1/clip_*.mp4) or one video" spellcheck="false">
+  <button id="load" class="primary">Load clips</button>
+  <span id="message"></span>
+</header>
+<main>
+  <aside class="panel" id="list"><div style="color:var(--muted);padding:8px">Enter a folder and press Load.</div></aside>
+  <section class="panel">
+    <div id="stage"><video id="video" muted playsinline preload="auto"></video><canvas id="overlay"></canvas></div>
+    <div id="chips"></div>
+    <canvas id="timeline"></canvas>
+    <div class="row">
+      <label>start</label><input id="startRange" type="range" min="0" max="1" step="0.01" value="0">
+      <input id="startNum" type="number" step="0.05"> s
+    </div>
+    <div class="row">
+      <label>end&nbsp;&nbsp;</label><input id="endRange" type="range" min="0" max="1" step="0.01" value="1">
+      <input id="endNum" type="number" step="0.05"> s
+    </div>
+    <div class="row">
+      <button id="play">Play / pause <kbd>space</kbd></button>
+      <button id="setStart">Start = now <kbd>[</kbd></button>
+      <button id="setEnd">End = now <kbd>]</kbd></button>
+      <button id="playCut">Play selection</button>
+      <label><input id="loop" type="checkbox"> loop</label>
+      <label><input id="accept" type="checkbox"> use this clip</label>
+    </div>
+    <div class="row">
+      <button id="save" class="primary">Save <kbd>s</kbd></button>
+      <button id="auto">Back to automatic cut</button>
+      <button id="prev">Previous clip <kbd>p</kbd></button>
+      <button id="next">Next clip <kbd>n</kbd></button>
+      <span id="saved" style="color:var(--muted)"></span>
+    </div>
+    <ul id="notes"></ul>
+    <p style="color:var(--muted);margin:10px 0 0">
+      Timeline: drag the blue handles to cut, click anywhere to seek. Arrow keys step one frame (shift: ten).
+      Shaded parts are removed. Lanes: green = frame usable; red = no hand, two hands, bad hand fit, hand at the
+      image edge or implausible depth; orange = pinch closed. The curve is the thumb-index distance with the
+      close and open thresholds.
+    </p>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $("video"), overlay = $("overlay"), timeline = $("timeline");
+let clips = [], current = -1, clip = null;
+let cut = { start: 0, end: 0, accepted: true }, dirty = false, drag = null;
+
+const say = (text) => { $("message").textContent = text || ""; };
+const fmt = (v) => (v == null ? "-" : v.toFixed(2));
+async function api(url, body) {
+  const response = await fetch(url, body ? { method: "POST", body: JSON.stringify(body) } : undefined);
+  const data = response.headers.get("content-type")?.includes("json") ? await response.json() : null;
+  if (!response.ok || (data && data.error)) throw new Error((data && data.error) || response.statusText);
+  return data;
+}
+
+async function loadClips() {
+  say("loading...");
+  try {
+    clips = (await api("/api/clips?location=" + encodeURIComponent($("location").value))).clips;
+    try { localStorage.setItem("clipcutter.location", $("location").value); } catch (e) {}
+    renderList(); say(clips.length + " clips");
+    if (clips.length) openClip(0);
+  } catch (error) { say(error.message); }
+}
+
+function renderList() {
+  $("list").innerHTML = "";
+  clips.forEach((row, index) => {
+    const button = document.createElement("button");
+    button.className = "clip" + (index === current ? " active" : "");
+    const state = row.stored ? (row.accepted ? "ok" : "bad") : "";
+    const detail = !row.stored ? "not cleaned yet"
+      : row.accepted ? `${row.source}: ${fmt(row.start_s)} - ${fmt(row.end_s)} s` : `${row.source}: rejected`;
+    button.innerHTML = `<span class="dot ${state}"></span>${row.name}<small>${detail}</small>`;
+    button.onclick = () => openClip(index);
+    $("list").appendChild(button);
+  });
+}
+
+async function openClip(index) {
+  if (dirty && !confirm("Unsaved changes on this clip. Leave anyway?")) return;
+  current = index; renderList(); say("analysing (first time takes a while)...");
+  try {
+    clip = await api("/api/clip?path=" + encodeURIComponent(clips[index].path));
+  } catch (error) { say(error.message); return; }
+  say("");
+  $("stage").style.aspectRatio = clip.image_size[0] + " / " + clip.image_size[1];
+  video.src = "/video?path=" + encodeURIComponent(clips[index].path);
+  const source = clip.stored || clip.auto;
+  const duration = clip.times_s[clip.times_s.length - 1] - clip.t0;
+  cut = {
+    start: source.start_s == null ? 0 : source.start_s - clip.t0,
+    end: source.end_s == null ? duration : source.end_s - clip.t0,
+    accepted: source.accepted,
+  };
+  dirty = false; syncControls(); notes(source); $("saved").textContent = clip.stored ? "saved (" + clip.stored.source + ")" : "proposal not saved yet";
+  draw();
+}
+
+function notes(source) {
+  $("notes").innerHTML = "";
+  [...source.reasons.map((t) => ["reason", t]), ...source.notes.map((t) => ["", t])].forEach(([kind, text]) => {
+    const item = document.createElement("li"); item.textContent = text; item.className = kind; $("notes").appendChild(item);
+  });
+}
+
+function duration() { return clip ? clip.times_s[clip.times_s.length - 1] - clip.t0 : 1; }
+function frameAt(time) {
+  const target = time + clip.t0, times = clip.times_s;
+  let low = 0, high = times.length - 1;
+  while (low < high) { const mid = (low + high + 1) >> 1; if (times[mid] <= target) low = mid; else high = mid - 1; }
+  return low;
+}
+
+function syncControls() {
+  const max = duration(), step = clip ? 1 / clip.fps : 0.01;
+  for (const id of ["startRange", "endRange"]) { $(id).max = max; $(id).step = step; }
+  for (const id of ["startNum", "endNum"]) { $(id).max = max; }
+  $("startRange").value = $("startNum").value = cut.start.toFixed(2);
+  $("endRange").value = $("endNum").value = cut.end.toFixed(2);
+  $("accept").checked = cut.accepted;
+}
+function setCut(start, end) {
+  const max = duration();
+  cut.start = Math.max(0, Math.min(start, max)); cut.end = Math.max(cut.start, Math.min(end, max));
+  dirty = true; $("saved").textContent = "unsaved changes"; syncControls(); draw();
+}
+$("startRange").oninput = () => setCut(+$("startRange").value, cut.end);
+$("startNum").onchange = () => setCut(+$("startNum").value, cut.end);
+$("endRange").oninput = () => setCut(cut.start, +$("endRange").value);
+$("endNum").onchange = () => setCut(cut.start, +$("endNum").value);
+$("accept").onchange = () => { cut.accepted = $("accept").checked; dirty = true; $("saved").textContent = "unsaved changes"; };
+$("setStart").onclick = () => setCut(video.currentTime, cut.end);
+$("setEnd").onclick = () => setCut(cut.start, video.currentTime);
+$("play").onclick = () => (video.paused ? video.play() : video.pause());
+$("playCut").onclick = () => { video.currentTime = cut.start; video.play(); };
+$("prev").onclick = () => current > 0 && openClip(current - 1);
+$("next").onclick = () => current < clips.length - 1 && openClip(current + 1);
+$("load").onclick = loadClips;
+$("location").onkeydown = (event) => event.key === "Enter" && loadClips();
+$("auto").onclick = async () => {
+  if (!clip) return;
+  await api("/api/reset", { path: clips[current].path });
+  clips[current] = { ...clips[current], stored: false, accepted: null, source: null };
+  const refreshed = await api("/api/clip?path=" + encodeURIComponent(clips[current].path)); clip = refreshed;
+  const auto = clip.auto;
+  cut = { start: auto.start_s == null ? 0 : auto.start_s - clip.t0, end: auto.end_s == null ? duration() : auto.end_s - clip.t0, accepted: auto.accepted };
+  dirty = false; syncControls(); notes(auto); renderList(); $("saved").textContent = "automatic proposal (not saved)"; draw();
+};
+$("save").onclick = async () => {
+  if (!clip) return;
+  await api("/api/cut", { path: clips[current].path, start_s: cut.start + clip.t0, end_s: cut.end + clip.t0, accepted: cut.accepted });
+  clips[current] = { ...clips[current], stored: true, accepted: cut.accepted, source: "manual", start_s: cut.start + clip.t0, end_s: cut.end + clip.t0 };
+  dirty = false; renderList(); $("saved").textContent = "saved (manual)";
+};
+
+document.addEventListener("keydown", (event) => {
+  if (event.target.tagName === "INPUT" && event.target.type === "text") return;
+  const frame = clip ? 1 / clip.fps : 0.03;
+  if (event.code === "Space") { event.preventDefault(); $("play").click(); }
+  else if (event.key === "[") $("setStart").click();
+  else if (event.key === "]") $("setEnd").click();
+  else if (event.key === "ArrowLeft") { video.pause(); video.currentTime = Math.max(0, video.currentTime - frame * (event.shiftKey ? 10 : 1)); }
+  else if (event.key === "ArrowRight") { video.pause(); video.currentTime = Math.min(duration(), video.currentTime + frame * (event.shiftKey ? 10 : 1)); }
+  else if (event.key === "n") $("next").click();
+  else if (event.key === "p") $("prev").click();
+  else if (event.key === "s") $("save").click();
+});
+
+video.onloadedmetadata = () => say(`video ${video.videoWidth}x${video.videoHeight}, ${video.duration.toFixed(1)} s`);
+video.onerror = () => say("the browser could not play the video copy: " + (video.error ? video.error.message : "unknown error"));
+video.ontimeupdate = () => {
+  if (!clip || video.paused) return;
+  if (video.currentTime >= cut.end && cut.end > cut.start) { if ($("loop").checked) video.currentTime = cut.start; else video.pause(); }
+};
+
+// ---- timeline ----
+const LABEL_W = 104, LANES = ["usable", "no hand", "2+ hands", "bad fit / edge", "pinch closed"];
+function xOf(time, width) { return LABEL_W + (time / duration()) * (width - LABEL_W - 8); }
+function timeOf(x, width) { return Math.max(0, Math.min(duration(), ((x - LABEL_W) / (width - LABEL_W - 8)) * duration())); }
+
+function drawTimeline() {
+  const dpr = window.devicePixelRatio || 1, width = timeline.clientWidth, height = timeline.clientHeight;
+  timeline.width = width * dpr; timeline.height = height * dpr;
+  const g = timeline.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, width, height);
+  const style = getComputedStyle(document.documentElement), ink = style.getPropertyValue("--ink"), muted = style.getPropertyValue("--muted");
+  g.font = "12px system-ui"; g.textBaseline = "middle";
+  if (!clip) { g.fillStyle = muted; g.fillText("Open a clip", 12, 20); return; }
+  const n = clip.times_s.length, laneH = 20, top = 8;
+  const lanes = [
+    clip.usable.map((v) => v === 1),
+    clip.flags["no hand"].map((v) => v === 1),
+    clip.flags["too many hands"].map((v) => v === 1),
+    clip.flags["hand fit bad"].map((v, i) => v === 1 || clip.flags["hand at image edge"][i] === 1 || clip.flags["depth implausible"][i] === 1),
+    clip.closed.map((v) => v === 1),
+  ];
+  const colours = ["#1f9d55", "#d64545", "#d64545", "#d64545", "#e08a00"];
+  lanes.forEach((lane, row) => {
+    const y = top + row * (laneH + 3);
+    g.fillStyle = muted; g.textAlign = "left"; g.fillText(LANES[row], 6, y + laneH / 2);
+    g.fillStyle = "rgba(128,128,128,0.12)"; g.fillRect(LABEL_W, y, width - LABEL_W - 8, laneH);
+    g.fillStyle = colours[row];
+    for (let i = 0; i < n; i++) {
+      if (!lane[i]) continue;
+      const x0 = xOf(clip.times_s[i] - clip.t0, width), x1 = xOf((i + 1 < n ? clip.times_s[i + 1] : clip.times_s[i] + 1 / clip.fps) - clip.t0, width);
+      g.fillRect(x0, y, Math.max(1, x1 - x0 + 0.6), laneH);
+    }
+  });
+  // aperture curve
+  const curveTop = top + LANES.length * (laneH + 3) + 14, curveH = height - curveTop - 22, maxCm = 12;
+  const yCm = (cm) => curveTop + curveH - (Math.min(cm, maxCm) / maxCm) * curveH;
+  g.fillStyle = muted; g.textAlign = "left"; g.fillText("pinch (cm)", 6, curveTop + curveH / 2);
+  g.strokeStyle = "rgba(128,128,128,0.4)"; g.setLineDash([4, 4]);
+  clip.thresholds_cm.forEach((cm) => { g.beginPath(); g.moveTo(LABEL_W, yCm(cm)); g.lineTo(width - 8, yCm(cm)); g.stroke(); g.fillText(cm.toFixed(0), width - 22, yCm(cm) - 8); });
+  g.setLineDash([]); g.strokeStyle = "#2f6fed"; g.lineWidth = 1.5; g.beginPath();
+  let pen = false;
+  for (let i = 0; i < n; i++) {
+    const value = clip.aperture_cm[i];
+    if (value == null) { pen = false; continue; }
+    const x = xOf(clip.times_s[i] - clip.t0, width), y = yCm(value);
+    if (pen) g.lineTo(x, y); else g.moveTo(x, y);
+    pen = true;
+  }
+  g.stroke(); g.lineWidth = 1;
+  // time axis
+  g.fillStyle = muted; g.textAlign = "center";
+  const stepS = duration() > 30 ? 5 : 2;
+  for (let t = 0; t <= duration(); t += stepS) g.fillText(t + " s", xOf(t, width), height - 8);
+  // removed parts
+  const xs = xOf(cut.start, width), xe = xOf(cut.end, width), bottom = curveTop + curveH;
+  g.fillStyle = "rgba(20,20,30,0.45)";
+  g.fillRect(LABEL_W, 0, xs - LABEL_W, bottom); g.fillRect(xe, 0, width - 8 - xe, bottom);
+  // handles
+  g.fillStyle = "#2f6fed";
+  for (const x of [xs, xe]) { g.fillRect(x - 1.5, 0, 3, bottom); g.fillRect(x - 6, 0, 12, 12); }
+  // cursor
+  const cx = xOf(video.currentTime || 0, width);
+  g.strokeStyle = "#ffcc00"; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, bottom + 6); g.stroke(); g.lineWidth = 1;
+}
+
+function pointerX(event) { return event.clientX - timeline.getBoundingClientRect().left; }
+timeline.onpointerdown = (event) => {
+  if (!clip) return;
+  const x = pointerX(event), width = timeline.clientWidth;
+  const nearStart = Math.abs(x - xOf(cut.start, width)) < 9, nearEnd = Math.abs(x - xOf(cut.end, width)) < 9;
+  drag = nearStart && (!nearEnd || Math.abs(x - xOf(cut.start, width)) <= Math.abs(x - xOf(cut.end, width))) ? "start" : nearEnd ? "end" : "seek";
+  timeline.setPointerCapture(event.pointerId); timeline.onpointermove(event);
+};
+timeline.onpointermove = (event) => {
+  if (!clip) return;
+  const width = timeline.clientWidth, time = timeOf(pointerX(event), width);
+  if (drag === "start") setCut(time, cut.end);
+  else if (drag === "end") setCut(cut.start, time);
+  else if (drag === "seek") video.currentTime = time;
+  else {
+    const near = [cut.start, cut.end].some((t) => Math.abs(pointerX(event) - xOf(t, width)) < 9);
+    timeline.style.cursor = near ? "col-resize" : "pointer";
+  }
+};
+timeline.onpointerup = () => { drag = null; };
+
+// ---- overlay ----
+const CHIPS = ["no hand", "too many hands", "hand fit bad", "hand at image edge", "depth implausible"];
+function drawOverlay() {
+  const w = overlay.clientWidth, h = overlay.clientHeight;
+  if (overlay.width !== w || overlay.height !== h) { overlay.width = w; overlay.height = h; }
+  const g = overlay.getContext("2d"); g.clearRect(0, 0, w, h);
+  if (!clip) return;
+  const i = frameAt(video.currentTime), scale = w / clip.image_size[0], points = clip.landmarks[i];
+  const outside = video.currentTime < cut.start || video.currentTime > cut.end;
+  if (outside) { g.fillStyle = "rgba(0,0,0,0.35)"; g.fillRect(0, 0, w, h); g.fillStyle = "#fff"; g.font = "bold 16px system-ui"; g.fillText("removed", 12, 26); }
+  if (points) {
+    g.lineWidth = 2; g.strokeStyle = "#7CFC9A";
+    clip.connections.forEach(([a, b]) => { g.beginPath(); g.moveTo(points[2 * a] * scale, points[2 * a + 1] * scale); g.lineTo(points[2 * b] * scale, points[2 * b + 1] * scale); g.stroke(); });
+    const [thumb, index] = clip.tips;
+    g.strokeStyle = "#ff4d4d"; g.lineWidth = 3; g.beginPath();
+    g.moveTo(points[2 * thumb] * scale, points[2 * thumb + 1] * scale); g.lineTo(points[2 * index] * scale, points[2 * index + 1] * scale); g.stroke();
+  }
+  const chips = [`t ${video.currentTime.toFixed(2)} s`, `frame ${i}`, `hands ${clip.hand_count[i]}`,
+    clip.aperture_cm[i] == null ? "pinch -" : `pinch ${clip.aperture_cm[i].toFixed(1)} cm (${clip.closed[i] ? "closed" : "open"})`,
+    clip.reprojection_px[i] == null ? "fit -" : `fit ${clip.reprojection_px[i].toFixed(1)} px`];
+  const bad = CHIPS.filter((name) => clip.flags[name][i] === 1);
+  $("chips").innerHTML = chips.map((t) => `<span class="chip">${t}</span>`).join("") +
+    (bad.length ? bad.map((t) => `<span class="chip bad">${t}</span>`).join("") : `<span class="chip ok">usable</span>`) +
+    (clip.layout_seen && Object.keys(clip.layout_seen).length
+      ? Object.entries(clip.layout_seen).map(([k, v]) => `<span class="chip ${v ? "ok" : "bad"}">${k} marker at start: ${v ? "seen" : "NOT seen"}</span>`).join("") : "");
+}
+
+function draw() { drawTimeline(); drawOverlay(); }
+function loop() { draw(); requestAnimationFrame(loop); }
+try { $("location").value = localStorage.getItem("clipcutter.location") || new URLSearchParams(location.search).get("location") || ""; } catch (e) {}
+const preset = new URLSearchParams(location.search).get("location");
+if (preset) $("location").value = preset;
+if ($("location").value) loadClips();
+loop();
+</script>
+</body>
+</html>

@@ -52,3 +52,14 @@ def test_fit_in_box_keeps_aspect_and_fits() -> None:
     assert fit_in_box(frame, 1800, 1000).shape[:2] == (600, 1800)  # width-limited
     assert fit_in_box(frame, 450, 1000).shape[:2] == (150, 450)  # shrinks too
     assert fit_in_box(frame, 900, 300) is frame  # already fits
+
+
+def test_save_gif_loops_forward_and_back(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from hurobo.utils.video import save_gif
+
+    frames = [np.full((8, 8, 3), value, dtype=np.uint8) for value in (0, 80, 160, 240)]
+    path = save_gif(frames, tmp_path / "out" / "sweep.gif")
+    with Image.open(path) as gif:
+        assert gif.n_frames == 6  # 4 forward + 2 back, endpoints not repeated

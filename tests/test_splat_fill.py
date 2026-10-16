@@ -64,3 +64,22 @@ def test_dish_prior_profile_is_flat_then_rises():
     heights = PRIOR.top_height(ratios)
     assert heights[0] == heights[1] == PRIOR.thickness_m
     assert abs(heights[2] - PRIOR.height_m) < 1e-12
+
+
+def test_pinhole_intrinsics_match_the_field_of_view() -> None:
+    from hurobo.splat import pinhole_intrinsics
+
+    k = pinhole_intrinsics(width=800, height=600, fov_deg=90.0)
+    assert abs(k[0, 0] - 400.0) < 1e-9  # tan(45 deg) = 1, so the focal length is half the width
+    assert (k[0, 2], k[1, 2]) == (400.0, 300.0)
+
+
+def test_arc_eyes_keep_radius_and_height() -> None:
+    from hurobo.splat import arc_eyes
+
+    target = np.array([1.0, 2.0, 0.5])
+    eyes = arc_eyes(target, radius=2.0, height=1.5, azimuth_range_deg=(-150, -30), num=5)
+    assert len(eyes) == 5
+    for eye in eyes:
+        assert abs(np.linalg.norm((eye - target)[:2]) - 2.0) < 1e-9
+        assert abs(eye[2] - target[2] - 1.5) < 1e-9

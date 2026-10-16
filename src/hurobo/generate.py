@@ -21,6 +21,7 @@ from hurobo.retarget import (
 )
 from hurobo.scaled_native import ScaledNativeScene, SimLayout, Workspace, table_to_world_map
 from hurobo.teleop import TableToWorld
+from hurobo.utils.signal import speed_percentile
 from hurobo.utils.video import VideoWriter, caption_frame
 
 STATE_NAMES = ["eef_x", "eef_y", "eef_z", "eef_aa_x", "eef_aa_y", "eef_aa_z", "gripper_q1", "gripper_q2"]
@@ -147,10 +148,43 @@ class DemoGenerator:
         """The table-to-world map in use."""
         return self._mapping
 
-    def layout_of_demo(self, demo: HumanDemo) -> SimLayout:
-        """The sim layout that is the human's own layout of that clip (the 'twin' of the recording)."""
+    def _retargeter(self) -> ObjectCentricRetargeter:
+        return ObjectCentricRetargeter(
+            self._mapping, self._scene.setup.bowl.radius_m, self._scene.plate_height_m, self._config
+        )
+
+    def slowdown_to_robot(
+        self, demo: HumanDemo, eef_path: np.ndarray, percentile: float = 99.0
+    ) -> tuple[float, float]:
+        """How much slower than recorded the human demo must run to stay within the robot's speed.
+
+        The robot's limit is measured, not assumed: a high percentile of the end-effector speed in a
+        rollout. The human's speed is compared with it over the part of the demo the robot replays.
+
+        Args:
+            demo: the human demo.
+            eef_path: shape (N, 3), end-effector positions of a rollout, one per control step.
+            percentile: speed percentile taken as the robot's limit.
+
+        Returns:
+            (factor, robot_limit_m_s): factor >= 1, and the limit.
+        """
+        limit = speed_percentile(eef_path, np.arange(len(eef_path)) / FPS, percentile)
+        start, end = self._retargeter().replayed_sample_range(demo)
+        return demo.slowdown_for(limit, start, end), limit
+
+    def layout_of_demo(self, demo: HumanDemo, clamp_to_workspace: bool = False) -> SimLayout:
+        """The sim layout that is the human's own layout of that clip (the 'twin' of the recording).
+
+        Args:
+            demo: the human demo.
+            clamp_to_workspace: snap bowl and plate into the scene's work area (for layouts that miss it
+                by a few mm or cm) instead of returning positions the arm may not reach.
+        """
         bowl = self._mapping.point_to_world(np.asarray(demo.t_table_bowl)[:3, 3])[:2]
         plate = self._mapping.point_to_world(np.asarray(demo.t_table_plate)[:3, 3])[:2]
+        if clamp_to_workspace:
+            bowl, plate = self._scene.workspace.clamp(bowl), self._scene.workspace.clamp(plate)
         return SimLayout(bowl_xy=bowl, plate_xy=plate)
 
     def rollout(
@@ -168,10 +202,7 @@ class DemoGenerator:
         """
         layout = layout or self._scene.sampler.sample()
         obs = self._scene.reset(layout)
-        retargeter = ObjectCentricRetargeter(
-            self._mapping, self._scene.setup.bowl.radius_m, self._scene.plate_height_m, self._config
-        )
-        plan = retargeter.plan(demo, layout)
+        plan = self._retargeter().plan(demo, layout)
         executor = PlanExecutor(self._scene, self._config)
         return executor.run(obs, plan), executor
 
@@ -197,6 +228,25 @@ class DemoGenerator:
                 writer.write(caption_frame(np.ascontiguousarray(image), step.phase))
                 eef_path.append(np.asarray(step.obs["robot_state"]["eef"]["pos"][0]))
         return executor.result, np.asarray(eef_path)
+
+    def replay_on_own_layout(
+        self, demo: HumanDemo, video_path: Path, size: int = 480, clamp_to_workspace: bool = True
+    ) -> tuple[RolloutResult, SimLayout, np.ndarray]:
+        """Replay a demo on the bowl and plate positions the human recorded, with a video.
+
+        Args:
+            demo: the human demo.
+            video_path: output .mp4 (20 fps).
+            size: video side in pixels.
+            clamp_to_workspace: snap the layout into the work area (see `layout_of_demo`).
+
+        Returns:
+            (result, layout, eef_path): the outcome, the layout that was used and the end-effector world
+            positions, shape (N, 3), one per step.
+        """
+        layout = self.layout_of_demo(demo, clamp_to_workspace)
+        result, eef_path = self.rollout_with_video(demo, video_path, layout, size)
+        return result, layout, eef_path
 
     def generate(
         self, count: int, recorder: LeRobotRecorder, task: str, max_attempts: int | None = None

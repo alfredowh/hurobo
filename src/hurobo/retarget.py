@@ -117,12 +117,24 @@ class RolloutResult:
         success: the LIBERO success check fired.
         steps: control steps taken.
         failure: why it stopped early ("" when it did not).
+        phases: names of the phases that ran, in order.
+        phase_start_steps: phase name -> index of the control step at which it began.
     """
 
     success: bool = False
     steps: int = 0
     failure: str = ""
     phases: list[str] = field(default_factory=list)
+    phase_start_steps: dict[str, int] = field(default_factory=dict)
+
+    def event_times_s(self, fps: float) -> list[float]:
+        """Times [start, approach, grasp, release, end] of the rollout, for lining it up with a human clip.
+
+        "approach" is where the transit from the home pose ends. A rollout that stopped before an event
+        (a failure) has that event at the end.
+        """
+        events = [self.phase_start_steps.get(name, self.steps) for name in ("approach", "grasp", "release")]
+        return [0.0, *(step / fps for step in events), self.steps / fps]
 
 
 def resample_path(path: np.ndarray, spacing_m: float) -> np.ndarray:
@@ -192,6 +204,20 @@ class ObjectCentricRetargeter:
         self._plate_height_m = plate_height_m
         self._config = config or RetargetConfig()
 
+    def replayed_sample_range(self, demo: HumanDemo) -> tuple[int, int]:
+        """The samples (first, last) of the human motion the robot replays: from where the hand comes within
+        `approach_radius_m` of the grasp point to the release.
+
+        Raises:
+            ValueError: if the demo has no grasp or no release.
+        """
+        if demo.grasp_frame_idx is None or demo.release_frame_idx is None:
+            raise ValueError("the demo needs a detected grasp and release")
+        tcp = np.asarray(demo.tcp_pos_table, dtype=float)
+        distance = np.linalg.norm(tcp[: demo.grasp_frame_idx + 1] - tcp[demo.grasp_frame_idx], axis=1)
+        far = np.flatnonzero(distance > self._config.approach_radius_m)
+        return (int(far[-1]) + 1 if len(far) else 0), demo.release_frame_idx
+
     def plan(self, demo: HumanDemo, layout: SimLayout) -> RetargetPlan:
         """Paths for one demo on one layout.
 
@@ -214,9 +240,7 @@ class ObjectCentricRetargeter:
         plate_xy_table = np.asarray(demo.t_table_plate)[:2, 3]
 
         # 1. approach: the stretch before the grasp that lies within approach_radius_m of it
-        distance = np.linalg.norm(tcp[: grasp_idx + 1] - tcp[grasp_idx], axis=1)
-        far = np.flatnonzero(distance > cfg.approach_radius_m)
-        start_idx = int(far[-1]) + 1 if len(far) else 0
+        start_idx = self.replayed_sample_range(demo)[0]
         approach_xy = self._to_world_xy(tcp[start_idx : grasp_idx + 1, :2], bowl_xy_table, layout.bowl_xy)
         approach_z = tcp[start_idx : grasp_idx + 1, 2].copy()
         radial = approach_xy[-1] - layout.bowl_xy
@@ -323,7 +347,7 @@ class PlanExecutor:
             pass
 
     def _script(self, plan: RetargetPlan) -> Iterator[RolloutStep]:
-        """The phases in order: approach, grasp, lift, carry, release, retreat."""
+        """The phases: transit (home to the approach), approach, grasp, lift, carry, release, retreat."""
         cfg = self._config
         above_start = plan.approach_world[0].copy()
         above_start[2] = SIM_TABLE_TOP_Z + cfg.transit_height_m
@@ -331,7 +355,8 @@ class PlanExecutor:
         for index, goal in enumerate(goals):
             last = index == len(goals) - 1
             tolerance = cfg.final_tolerance_m if last else cfg.pass_tolerance_m
-            yield from self._reach(lambda goal=goal: goal, False, "approach", tolerance)
+            phase = "transit" if index == 0 else "approach"
+            yield from self._reach(lambda goal=goal: goal, False, phase, tolerance)
         yield from self._hold_gripper(True, "grasp")
         lift_to = self._eef_pos() + np.array([0.0, 0.0, 0.6 * cfg.transit_height_m])
         yield from self._reach(lambda: lift_to, True, "lift", 0.01)
@@ -397,6 +422,7 @@ class PlanExecutor:
         result.steps += 1
         if not result.phases or result.phases[-1] != phase:
             result.phases.append(phase)
+            result.phase_start_steps.setdefault(phase, result.steps - 1)
         result.success = result.success or success or terminated
         yield RolloutStep(obs=before, action=action, phase=phase, success=result.success)
         if result.success:

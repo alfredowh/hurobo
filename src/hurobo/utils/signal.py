@@ -93,6 +93,21 @@ def resample_to_rate(
     return new_timestamps_s, interpolator(new_timestamps_s)
 
 
+def speed_percentile(positions: np.ndarray, timestamps_s: np.ndarray, percentile: float = 95.0) -> float:
+    """A percentile of the speed along a sampled path (a high one stands for "how fast it goes at most").
+
+    Args:
+        positions: shape (N, D), N >= 2.
+        timestamps_s: shape (N,), strictly increasing.
+        percentile: in [0, 100].
+
+    Returns:
+        speed in position units per second.
+    """
+    speeds = np.linalg.norm(np.diff(positions, axis=0), axis=1) / np.diff(timestamps_s)
+    return float(np.percentile(speeds, percentile))
+
+
 def time_scale(timestamps_s: np.ndarray, factor: float) -> np.ndarray:
     """Stretch a time series by a constant factor (e.g. slow human motion for robot dynamics).
 

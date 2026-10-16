@@ -14,7 +14,7 @@ Written for: you, at the table with a phone, a tablet and two objects.
 
 So you record once. Keep the raw videos and the extracted demos; E2 and E3 regenerate their robot data from the same demos.
 
-Notebook: [`examples/10_scaled_native_experiment.ipynb`](../examples/10_scaled_native_experiment.ipynb) (runs the whole chain on stand-in demos). Design log: D-010 in [design_decisions.md](design_decisions.md).
+Notebook: [`examples/08_scaled_native_experiment.ipynb`](../examples/08_scaled_native_experiment.ipynb) (runs the whole chain on stand-in demos). Design log: D-010 in [design_decisions.md](design_decisions.md).
 
 ---
 
@@ -25,10 +25,10 @@ Notebook: [`examples/10_scaled_native_experiment.ipynb`](../examples/10_scaled_n
 | Leave the **tablet with the ChArUco board** and the **table** where they were for the scans (`data/raw/setup_01`). | The board is the table frame. The scans' splats live in the same frame, so E2 and E3 need no alignment. |
 | Measure the **bowl height** and put it in `measurements.yaml` (it is marked `TODO`, now 0.067 m). | It sets how high the fingers close. |
 | Use the **same bowl and plate** as in the scans. | E2 attaches their splats. |
-| Print `bowl_pad.png` and `plate_marker.png` at **100 %** on A4 landscape, then measure the black square: it must be **60 mm**. | The marker size sets the metric scale of the object poses. |
+| Print `bowl_pad.png` and `plate_marker.png` at **100 %** on A4 landscape, then measure the black square: it must be as set in `RecordingSpec.marker_length_m` (**57.5 mm** measured on the first print: the printer scaled it). | The marker size sets the metric scale of the object poses. |
 | Phone: 1x main lens, 1080p30, stabilisation off, focus and exposure locked, no zoom. | One fixed camera model. Same settings as the scans. |
 
-Tablet: white background, night filter off, medium to high brightness, no glare on the screen. Measure one square on the glass with a ruler (it should be 25 mm) and do not zoom afterwards.
+Tablet: white background, night filter off, medium to high brightness, no glare on the screen. Measure one square on the glass with a ruler (measured 37 mm on the first tablet; `square_length_m` in `measurements.yaml`) and do not zoom afterwards.
 
 ## 2. Plan the session (once)
 
@@ -63,7 +63,7 @@ From there the board is large in the frame and the pinch is seen from the front.
 Record a **10 s test clip** with everything in place: pad and plate marker down, you do one full pick and place. Then:
 
 ```bash
-uv run python scripts/17_check_capture.py data/raw/e1/test.mp4 --intrinsics data/camera_intrinsics_s24.npz
+uv run python scripts/17_check_capture.py data/raw/e1/test.mp4 --intrinsics data/camera_intrinsics_s10e.npz
 ```
 
 It prints PASS, or what to fix: board not found, board too small, a marker not seen in the first second, hand lost, no grasp or release found, grasp not near the bowl. Fix, re-record the test clip, repeat until it passes.
@@ -126,7 +126,7 @@ What is **not** taken from you: the hand's orientation, its speed, where it star
 # human clips -> table-frame demos + a QC report (reads sizes from measurements.yaml)
 uv run python scripts/02_extract_demos.py data/raw/e1/clip_*.mp4 \
     --setup data/raw/setup_01/measurements.yaml \
-    --intrinsics data/camera_intrinsics_s24.npz --out data/e1/demos
+    --intrinsics data/camera_intrinsics_s10e.npz --out data/e1/demos
 ```
 
 It prints `OK` or `FLAG` per clip with the reasons and writes `data/e1/demos/summary.json`. Clips are never dropped silently; a flagged clip is skipped by the next steps.
@@ -164,7 +164,7 @@ uv run python scripts/19_train_smolvla.py data/e1/generated --out outputs/e1_smo
 
 By default only the action expert is trained (`--train-vlm` adds the language model; `lerobot/smolvla_libero` trained all of it). A 20-step smoke run on 30 stand-in episodes works at batch 4 (about 4 steps/s); the time of a full run at batch 32 has not been measured.
 
-**Evaluate** with our own loop, because `lerobot-eval` rebuilds the stock scene on every reset (which would put the small plate and bowl back). `hurobo.policy_rollout` applies the same processing as `lerobot-eval` (image turn, state, tokenizer, normalisation) and stops at the first success. `scripts/18_benchmark_policy.py` runs checkpoints x conditions (`stock`, `clean`, `scaled`) x replan intervals for N episodes each, with the same layouts for every checkpoint, and writes a resumable JSONL, a summary table (success with a 95 % Wilson interval, share of episodes that lifted the bowl) and videos. Open loop (`--open-loop-dataset`) compares predicted action chunks with a demonstration dataset without the simulator. Notebook: [`examples/11_smolvla_benchmark.ipynb`](../examples/11_smolvla_benchmark.ipynb); log: D-011.
+**Evaluate** with our own loop, because `lerobot-eval` rebuilds the stock scene on every reset (which would put the small plate and bowl back). `hurobo.policy_rollout` applies the same processing as `lerobot-eval` (image turn, state, tokenizer, normalisation) and stops at the first success. `scripts/18_benchmark_policy.py` runs checkpoints x conditions (`stock`, `clean`, `scaled`) x replan intervals for N episodes each, with the same layouts for every checkpoint, and writes a resumable JSONL, a summary table (success with a 95 % Wilson interval, share of episodes that lifted the bowl) and videos. Open loop (`--open-loop-dataset`) compares predicted action chunks with a demonstration dataset without the simulator. Notebook: [`examples/09_smolvla_benchmark.ipynb`](../examples/09_smolvla_benchmark.ipynb); log: D-011.
 
 ```bash
 MUJOCO_GL=egl uv run python scripts/18_benchmark_policy.py --checkpoints lerobot hfvla \

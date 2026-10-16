@@ -28,6 +28,7 @@ happened **after** that: defaults that did not work on our data, and what we did
 | VLA | SmolVLA (`lerobot/smolvla_base`), ACT fallback | As-is (planned) | PLAN.md §2. |
 | Hand landmarks | MediaPipe Hand Landmarker | As-is | Landmarks only. |
 | Metric hand pose | MediaPipe + ArUco + `solvePnP` + anchor correction | Novel (own code, `hand.py`) | PLAN.md §2, HaWoR rejected there. |
+| Clip cleaning before extraction | none (own code, `clip_clean.py`, `clip_cutter_app.py`) | Novel | Frame and clip filters, one open-close-open cycle per clip, cuts file, browser UI. D-012. |
 | Marker poses, ChArUco calibration | OpenCV ArUco | As-is | |
 | Structure from motion | `pycolmap` (SIFT, matching, incremental mapping) | **Configured** | D-001. Lowered SIFT threshold is the script default; exhaustive matching is the fallback. |
 | Splat training | `gsplat` rasteriser and densification strategy | **Modified** | Own minimal trainer (`SplatTrainer`), see D-002, D-003. |
@@ -64,7 +65,7 @@ verified matches.
 defaults, so `scripts/09_scan_object.py` behaves as before. The sweep (`scripts/14_scan_param_sweep.py`) runs
 non-default sets.
 
-**Evidence** (`examples/08_scan_parameter_sweep.ipynb`, 1-angle clip, one run each, from repo code):
+**Evidence** (`examples/06_scan_parameter_sweep.ipynb`, 1-angle clip, one run each, from repo code):
 
 | Settings | Registered | Models |
 |---|---|---|
@@ -150,7 +151,7 @@ holds for a turntable on a plain backdrop.
 3. The script writes the uncropped `<name>_full.ply` and crops from it, so `--recrop` changes the crop without
    re-running SfM or training.
 
-**Evidence** (`examples/08_scan_parameter_sweep.ipynb`, `low_sift_threshold` splat). The reference is the bowl
+**Evidence** (`examples/06_scan_parameter_sweep.ipynb`, `low_sift_threshold` splat). The reference is the bowl
 located by triangulating its white pixels over 68 of 120 keyframes, independent of the splat and the SfM points
 (ray residual 0.19 units; it works only because the bowl is the one white object):
 
@@ -224,7 +225,7 @@ stays in SfM units, so it attaches with `SplatFit.MATCH_BODY_XY`.
   blob (214 Gaussians) instead of the bowl on the script's 1-angle splat. With the final defaults all three crop
   methods give a bowl on the sweep splat, so the extraction is much less sensitive to the crop than the crop is.
 
-**Evidence** (`examples/08_scan_parameter_sweep.ipynb`): extracted footprint radius 1.21 and 1.00 against the
+**Evidence** (`examples/06_scan_parameter_sweep.ipynb`): extracted footprint radius 1.21 and 1.00 against the
 white-pixel reference radii 1.25 and 0.92 (1-angle, 3-angle clips); about 10k Gaussians (560 KB); all five splats
 render as a bowl on the LIBERO table in place of its bowl.
 
@@ -245,7 +246,7 @@ render as a bowl on the LIBERO table in place of its bowl.
 **Cause.** The fit used every point, including the room outside the camera orbit. Restricted to points inside the orbit circle the floor share is 42 % (plate), 56 % (bowl_low), 39 % (bowl_high).
 **Upstream defaults.** D-004: RANSAC on all points, `min_inlier_fraction=0.3`.
 **Change.** `estimate_object_crop` fits the floor to points whose xy lies inside the fitted camera ring. Test: `test_estimate_object_crop_fits_the_floor_inside_the_camera_ring_only`.
-**Evidence.** `examples/08_scan_parameter_sweep.ipynb`, part 2. The crop for `bowl_1angle` is nearly unchanged (radius 2.68 vs the 2.74 in D-004).
+**Evidence.** `examples/06_scan_parameter_sweep.ipynb`, part 2. The crop for `bowl_1angle` is nearly unchanged (radius 2.68 vs the 2.74 in D-004).
 **Status and limits.** The pipeline default. Checked on `bowl_1angle` and the five new clips (3 bowl heights + plate), not on other scenes.
 
 Two related findings from the same clips, recorded so they are not re-tried:
@@ -269,6 +270,8 @@ Two related findings from the same clips, recorded so they are not re-tried:
 | The sharpest frame per time bin is picked, so keyframe spacing is uneven. | `hurobo.scan.KeyframeSampler` | Uneven overlap. |
 | Clip combinations containing the medium-height bowl clip, and both plate combinations, do not reconstruct consistently (D-007). Cause unknown. | `ScanSweep`, `combined_clip_sweep` | Multi-clip scanning is validated for bowl high + low only; use single clips otherwise. |
 | Held-out views neighbour training views along the same lap, and PSNR is dominated by floor pixels. | `SplatTrainer`, `scan_sweep` | PSNR does not measure novel viewpoints or bowl quality. |
+| Marker size: `test_03` fails the position gates (grasp 0.45 m from the bowl marker, release 0.33 m from the plate marker) with the assumed 6.0 cm printed markers. Both marker poses lie 0.26 m below the table and need the same distance scale, 0.65, as the hand's anchor scale (0.65), which implies markers of about 3.9 cm. With `--marker-size-m 0.039` `test_03` passes every gate (grasp 6.5 cm from the bowl centre, release 3.3 cm from the plate marker). **Not applied as a default: the printed size has not been measured.** | `RecordingSpec.marker_length_m`, `02_extract_demos.py --marker-size-m`, `17_check_capture.py` | Poses of the pad and plate markers are wrong by the size ratio until the real size is entered. |
+| The cleaner's grasp/release (merged flickers, `CleaningConfig.min_open_s`) and the extractor's (smoothed hysteresis) are computed separately. Seen on `test_04`: the cleaner keeps 5.73-14.56 s as a full cycle, the extraction of that cut reports "no release detected". | `ClipCleaner.closed_signal`, `DemoExtractor` | A clip the cleaner accepts can still fail the extraction gates. |
 
 ### D-008 · 2026-10-13 · Training knobs do not fill the plate (negative result)
 
@@ -292,9 +295,9 @@ Two related findings from the same clips, recorded so they are not re-tried:
 **Cause.** Detection: in the unusable clips the board is about 70 px wide at a grazing angle and the tablet shows the white squares cyan (checked on a crop of one frame); in `table_scene_zoom_02/_03` it fills a few hundred pixels and all 17 markers are found. Pipeline: board sizes were hard-wired to 35 mm squares, and objects needed a hand-measured `--object X Y R H`.
 **Upstream defaults.** `ChArUcoCalibrator` 35 mm / 26 mm; cylinder tabletop crop; objects by hand-measured position.
 **Change.** `--square-length`, `--marker-length`, `--board-thickness` (lifts the table frame so the tabletop is z = 0), `--table-box` (`CropBox`), `--find-object NAME DIAMETER HEIGHT` (blobs above the tabletop inside the box, matched by size), several videos per run (`KeyframeSampler.sample_many`), and `--recrop --charuco` to redo the alignment and cut without re-training. `board_visibility` tests a clip for the board before SfM.
-**Evidence.** `examples/08_scan_parameter_sweep.ipynb`, part 4; tests `test_scan_split.py`, `test_locate_objects.py`, `test_board_visibility.py`. `zoom_02` alone: 120/120, corner RMS 1.1 mm, held-out PSNR 29.5 dB. `zoom_02 + zoom_03`: 120/120, RMS 0.5 mm, held-out 25.6 dB (not like-for-like). Plate and bowl blobs measure about 26 cm and 16 x 14 cm against a ruler's 25.5 and 13.8 cm. First finder version searched the whole splat and returned the plate at x = 1.73 m (outside the table); restricting it to the table box fixed that (plate (0.192, -0.303), bowl (0.466, -0.301), the same as in the single-clip scan).
+**Evidence.** `examples/06_scan_parameter_sweep.ipynb`, part 4; tests `test_scan_split.py`, `test_locate_objects.py`, `test_board_visibility.py`. `zoom_02` alone: 120/120, corner RMS 1.1 mm, held-out PSNR 29.5 dB. `zoom_02 + zoom_03`: 120/120, RMS 0.5 mm, held-out 25.6 dB (not like-for-like). Plate and bowl blobs measure about 26 cm and 16 x 14 cm against a ruler's 25.5 and 13.8 cm. First finder version searched the whole splat and returned the plate at x = 1.73 m (outside the table); restricting it to the table box fixed that (plate (0.192, -0.303), bowl (0.466, -0.301), the same as in the single-clip scan).
 **Status and limits.** One table, one board position, two clips; the table is only partly covered. The tablet thickness and square size are hand measurements, the 18.6 mm marker size is derived from the 26/35 ratio. The cut cylinders start 1 cm below the tabletop, so the extracted plate and bowl carry a skirt of wood grain (visible in the renders); they are not floor-cleaned like the single-object extraction (D-006). Not the guide's default command yet.
-**README:** not added. One scene, flags rather than defaults, and the table scan is not yet used in the sim.
+**README:** added: the splat gallery in section 3 (sweep, held-out photo vs splat) as a visual only, with the one-scene caveat. The table scan is not used in the sim.
 
 ### D-009 · 2026-10-14 · Shape-prior fill for the plate
 
@@ -304,10 +307,10 @@ Two related findings from the same clips, recorded so they are not re-tried:
 **Cause.** See D-008: a glossy white, textureless plate gives the optimiser too little signal; more iterations or densification did not help.
 **Upstream defaults.** None: nothing upstream does this. Learned alternatives were reviewed, not tried (see below).
 **Change.** `DishFiller.fill` fits the measured dish (0.255 m diameter, 0.028 m high from `measurements.yaml`; flat-base fraction 0.55 and thickness 6 mm are assumed) to an extracted object splat: scale from the median over 36 azimuth sectors of the 95th-percentile radius, drops Gaussians more than 8 mm off the surface, adds flat surface-aligned Gaussians where no solid Gaussian is within one lattice spacing, coloured from bright low-saturation neighbours only.
-**Evidence.** `examples/08_scan_parameter_sweep.ipynb`, Part 5; `tests/test_splat_fill.py`. `plate_med`: 22,445 kept, 10,625 dropped, 44,313 added, coverage 0.34 to 1.00. `plate_low`: 24,486 kept, 34,891 added, 0.47 to 0.98. The coverage proxy ignores Gaussian extent and rises by construction, so the judgement is visual: closed white disc, printed pattern kept, facets and baked gloss visible.
+**Evidence.** `examples/06_scan_parameter_sweep.ipynb`, Part 5; `tests/test_splat_fill.py`. `plate_med`: 22,445 kept, 10,625 dropped, 44,313 added, coverage 0.34 to 1.00. `plate_low`: 24,486 kept, 34,891 added, 0.47 to 0.98. The coverage proxy ignores Gaussian extent and rises by construction, so the judgement is visual: closed white disc, printed pattern kept, facets and baked gloss visible.
 **Status and limits.** Opt-in, not wired into `scripts/09_scan_object.py` or `ScanSweep`. Two clips of one plate, no held-out photometric score. The rim and profile are the prior, not a measurement. Splat units, as before (`MATCH_BODY_XY`).
 **Alternatives reviewed, not run (subagent, 2026-10-14; sizes from the Hugging Face API, VRAM and runtimes mostly unverified):** Depth Anything V2 Large 1.34 GB (CC-BY-NC, pip, fits 16 GB) as a depth loss in `SplatTrainer`; Depth Pro 1.9 GB; PGSR / 2DGS planar regularisation (compile risk, port as a loss); TRELLIS 3.3 GB and SAM 3D Objects 13.2 GB are risky on 16 GB and cu126; PoinTr has a Python 3.7-era extension stack and the wrong domain. Rejected for now, not evaluated on our data.
-**README:** not added: two clips, visual judgement only, opt-in.
+**README:** added: the scanned plate in the gallery, labelled as filled by a shape prior. Not added: any quality number (two clips, visual judgement only, opt-in).
 
 
 ### D-010 · 2026-10-14 · E1 Scaled-Native: real-size bowl and plate in LIBERO, retargeted from the home pose
@@ -317,7 +320,7 @@ Two related findings from the same clips, recorded so they are not re-tried:
 Full guide: [experiment_scaled_native.md](experiment_scaled_native.md). Decisions, in the order they were forced on us:
 
 1. **Uniform scale per object, to the measured diameter.** Bowl x1.227 (LIBERO 11.2 cm to 13.8 cm), plate x1.855 (13.8 cm to 25.5 cm). Heights follow LIBERO's proportions: bowl -4 %, plate +10 % against the measurements (the bowl height in `measurements.yaml` is a `TODO`). Anisotropic scaling was not done: the collision boxes sit at arbitrary rotations in the body frame.
-2. **The other five libero_goal objects are parked** (8 m away, collisions off). With the plate at real size, 0.00 % of random bowl/plate pairs in the work area avoid them, 38 % when the table is cleared (`layout_feasible_fraction`, notebook 10, section 2; 0.06 % against 29 % in an earlier, wider work area). The scene is therefore not fully "native". `keep_distractors=True` restores them.
+2. **The other five libero_goal objects are parked** (8 m away, collisions off). With the plate at real size, 0.00 % of random bowl/plate pairs in the work area avoid them, 38 % when the table is cleared (`layout_feasible_fraction`, notebook 08, section 2; 0.06 % against 29 % in an earlier, wider work area). The scene is therefore not fully "native". `keep_distractors=True` restores them.
 3. **Layouts are ours, not LIBERO's init states.** Its 2 cm ranges put the small plate where the large one now overlaps the bowl.
 4. **The work area is 0.26 m deep and 0.50 m wide**, not the whole table. A reach map (`hurobo.reach`, home orientation, fingertips 0.94 and 1.05 m up) gives position errors under 0.5 cm for |y| <= 0.2 up to x = 0.10, 2.3 cm at (x = 0.10, |y| = 0.3) and 4.5 to 15 cm farther out at the higher height. A first, wider work area made an approach from the far side time out (arm stuck at 0.76 m from the base). The approach is also pulled back inside 0.76 m of the base.
 5. **Grasp height is fixed to 4 cm above the table** in the robot demo; the human height is replaced. With the human value (clipped to 3 to 6 cm) 2 of 10 rollouts closed on the very top of the 2 mm wall and did not lift the bowl; with 4 cm none of the next 30 did.
@@ -361,9 +364,23 @@ Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for 
 **Cause.** Not established. `clean` already fails at LIBERO's own object sizes, so the real-size scaling is not the (only) cause. Untested candidates: our layouts lie outside the fixed start positions the checkpoints saw, and the removed distractors.
 **Upstream defaults.** `lerobot-eval` on the stock scene.
 **Change.** Own loop that applies the same processing as `lerobot-eval` (checked indirectly: stock success matches expectation), stops at first success, and resets the scene itself. `lerobot/smolvla_libero` needs `image -> camera1`, `image2 -> camera2`.
-**Evidence.** `scripts/18_benchmark_policy.py --checkpoints lerobot hfvla --conditions stock clean scaled --replan 10 --episodes 10`; notebook 11; saved results and one video per experiment in `eval/pretrained_libero_checkpoints/`. Checkpoints chosen by Hub likes (20 and 7), queried 2026-10-16. Open loop (100 frames of the stand-in dataset): gripper sign accuracy 0.56 and 0.44, and position error above the do-nothing baseline on dx, dy, dz; the demos are retargeted stand-in paths, not LIBERO human demos.
+**Evidence.** `scripts/18_benchmark_policy.py --checkpoints lerobot hfvla --conditions stock clean scaled --replan 10 --episodes 10`; notebook 09; saved results and one video per experiment in `eval/pretrained_libero_checkpoints/`. Checkpoints chosen by Hub likes (20 and 7), queried 2026-10-16. Open loop (100 frames of the stand-in dataset): gripper sign accuracy 0.56 and 0.44, and position error above the do-nothing baseline on dx, dy, dz; the demos are retargeted stand-in paths, not LIBERO human demos.
 **Status and limits.** `smolvla_base` cannot run LIBERO zero-shot (6-D state/action). Training: only a 20-step smoke run on 30 stand-in episodes (checkpoint 0/1 in `scaled`, as expected). Those episodes run 270-350 steps against LIBERO's 300-step limit. The `stock` result for HuggingFaceVLA depends on its n_action_steps being overridden to 10.
 **README:** not added: pretrained-only numbers on stand-in data, cause unknown.
+
+### D-012 · 2026-10-16 · Cleaning step before extraction: one hand, one grasp cycle, a cut per clip
+
+**Component:** `hurobo.clip_clean`, `scripts/20_clean_clips.py`, `scripts/21_clip_cutter.py`. **Status:** Novel (extraction takes the cut through `window_s`).
+
+**Symptom.** On the four test clips of 2026-10-16 the hand is in view for only 22-61 % of the frames, and the extraction gates fail on the whole clip: "hand detected in 83 % of frames; hand lost for 2.70 s" (`test_03`), and the clip is skipped when the plate marker is missing in its first 0.6 s.
+**Cause.** The extraction uses every frame, so dropouts before the hand enters and after it leaves count against the clip, and a clip with several grasps gives an ambiguous grasp/release pair.
+**Upstream defaults.** None (our own pipeline): all frames of the clip, first grasp and first release of the smoothed aperture.
+**Change.** A cleaning step: per-frame filters (no hand, more than one hand, PnP reprojection > 15 px, landmark within 8 px of the border, depth outside 0.15-3 m), then the first gap-free run (gaps up to 0.4 s bridged) that holds an open, closed, open cycle; kept from the start of the run to 2 s after the release (0.5 s at first; raised on 2026-10-16 so the hand's retreat is kept). Closed pinches shorter than 0.2 s and open gaps shorter than 0.3 s are noise: on `test_03` one sample at 5.2 cm (8.5 s) crossed the 5 cm open threshold in the middle of a 5 s grasp, which without the 0.3 s rule cut the clip at the false release. Clips shorter than 1.5 s, or without the board, bowl or plate marker in the first second, are rejected. The cuts go to `<folder>/cuts.json`; `02_extract_demos.py --cuts` skips rejected clips and passes the window to the extractor, which still takes the table pose and the layout from the clip's first 0.6 s.
+**Evidence.** `scripts/20_clean_clips.py "data/raw/e1/test_0*.mp4"`: `test_03` is cut to 2.70-11.10 s and `test_04` to 5.73-14.56 s; `test_01` and `test_02` are rejected (no complete cycle with one hand). Extracting `test_03` with and without the cut: the two dropout reasons disappear (169 against 310 samples). 10 unit tests in `tests/test_clip_clean.py`. Notebook 10.
+**Status and limits.** Default thresholds are guesses checked on four clips, not tuned: no ground truth for where a human would cut. The extraction still decides grasp and release by its own smoothed hysteresis, which can differ from the cleaner's on noisy clips. `test_03` still fails the extraction gates on position ("grasp 0.45 m from bowl marker", "release 0.33 m from plate marker"): the cut does not address it (see the open issues).
+**README:** not added: a data-preparation step, validated on four test clips only.
+
+---
 
 ---
 

@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=Path("data/e1/replay"))
     parser.add_argument("--random-layout", action="store_true", help="new object positions, not the human's")
     parser.add_argument(
+        "--clamp-layout",
+        action="store_true",
+        help="snap the human's bowl/plate into the work area instead of skipping the clip",
+    )
+    parser.add_argument(
         "--keep-distractors", action="store_true", help="leave LIBERO's other objects in place"
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -49,7 +54,7 @@ def main() -> None:
 
     results = []
     for path, demo in zip(paths, demos, strict=True):
-        layout = None if args.random_layout else generator.layout_of_demo(demo)
+        layout = None if args.random_layout else generator.layout_of_demo(demo, args.clamp_layout)
         if layout is not None and not (
             scene.workspace.contains(layout.bowl_xy) and scene.workspace.contains(layout.plate_xy)
         ):

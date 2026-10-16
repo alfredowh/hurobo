@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
+
+from hurobo.utils.signal import speed_percentile, time_scale
 
 
 @dataclass
@@ -65,6 +67,31 @@ class HumanDemo:
             release_frame_idx=-1 if self.release_frame_idx is None else self.release_frame_idx,
             source_start_time_s=self.source_start_time_s,
         )
+
+    def slowdown_for(
+        self, max_speed_m_s: float, start_idx: int = 0, end_idx: int | None = None, percentile: float = 95.0
+    ) -> float:
+        """The factor by which this demo must be slowed so that its TCP stays within a speed limit.
+
+        Args:
+            max_speed_m_s: the speed the slowed TCP should not exceed (at `percentile`).
+            start_idx: first sample of the stretch that has to respect the limit.
+            end_idx: last sample of that stretch (inclusive); the end of the demo by default.
+            percentile: speed percentile compared with the limit; a high one rather than the maximum,
+                which is a single noisy sample.
+
+        Returns:
+            Factor >= 1 (a demo already within the limit is not sped up).
+        """
+        stop = len(self.timestamps_s) if end_idx is None else end_idx + 1
+        speed = speed_percentile(
+            self.tcp_pos_table[start_idx:stop], self.timestamps_s[start_idx:stop], percentile
+        )
+        return max(1.0, speed / max_speed_m_s)
+
+    def time_scaled(self, factor: float) -> HumanDemo:
+        """A copy whose motion takes `factor` times as long (> 1 slower); poses and events are unchanged."""
+        return replace(self, timestamps_s=time_scale(self.timestamps_s, factor))
 
     @classmethod
     def load(cls, path: Path) -> HumanDemo:

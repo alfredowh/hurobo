@@ -90,20 +90,25 @@ class HandTcpTracker:
     increasing timestamps).
     """
 
-    def __init__(self, intrinsics: CameraIntrinsics, model_path: Path | None = None) -> None:
+    def __init__(
+        self, intrinsics: CameraIntrinsics, model_path: Path | None = None, num_hands: int = 1
+    ) -> None:
         """Set up the HandLandmarker for a specific camera's intrinsics.
 
         Args:
             intrinsics: calibrated intrinsics for the camera the frames come from.
             model_path: path to hand_landmarker.task; downloaded automatically
                 to a cache dir if not given and not already present there.
+            num_hands: most hands the detector looks for. Only one is tracked (the first reported); a
+                larger value lets `last_hand_count` reveal a second hand in view.
         """
         self._intrinsics = intrinsics
+        self.last_hand_count = 0
         resolved_model_path = model_path or ensure_model_downloaded()
         options = mp_vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(resolved_model_path)),
             running_mode=mp_vision.RunningMode.VIDEO,
-            num_hands=1,
+            num_hands=num_hands,
             min_hand_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
@@ -125,6 +130,7 @@ class HandTcpTracker:
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = self._landmarker.detect_for_video(mp_image, timestamp_ms)
+        self.last_hand_count = len(result.hand_landmarks)
         if not result.hand_landmarks:
             return None
 

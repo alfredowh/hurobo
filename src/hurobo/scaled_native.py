@@ -139,6 +139,12 @@ class Workspace:
             self.x_range[0] <= xy[0] <= self.x_range[1] and self.y_range[0] <= xy[1] <= self.y_range[1]
         )
 
+    def clamp(self, xy: np.ndarray) -> np.ndarray:
+        """The world (x, y) nearest to `xy` that lies inside the rectangle."""
+        return np.array(
+            [np.clip(xy[0], *self.x_range), np.clip(xy[1], *self.y_range)],
+        )
+
 
 def table_to_world_map(setup: RealSetup, workspace: Workspace) -> TableToWorld:
     """Map the table frame to the world so that the real table centre lands on the workspace centre.
@@ -215,7 +221,7 @@ class ScaledNativeScene:
       the collision boxes and the mass follow). The real plate is 1.86x LIBERO's.
     - **The five other objects are parked off the table** (no collision, 8 m away). With the real-size plate
       almost no layout fits between them (0.00 % of random bowl/plate pairs in the work area, 38 % when
-      cleared; notebook 10). Pass `keep_distractors=True` to leave them where LIBERO puts them.
+      cleared; notebook 08). Pass `keep_distractors=True` to leave them where LIBERO puts them.
     - **The initial layout is ours** (`SimLayout`), not LIBERO's init state: its 2 cm ranges were made for
       the small plate, which now overlaps the bowl there.
 

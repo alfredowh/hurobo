@@ -15,7 +15,7 @@ CLIPS_OBJECTS = Path("data/scans/clips/_objects")
 
 @dataclass(frozen=True)
 class BestScans:
-    """Paths of the chosen object splats (z-up, base at z = 0); picked in notebook 08.
+    """Paths of the chosen object splats (z-up, base at z = 0); picked in notebook 06.
 
     Attributes:
         bowl_ply: bowl from the high + low clips scanned together (consistent cameras, closed wall).

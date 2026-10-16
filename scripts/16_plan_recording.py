@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--setup", type=Path, default=DEFAULT_MEASUREMENTS)
-    parser.add_argument("--intrinsics", type=Path, default=Path("data/camera_intrinsics_s24.npz"))
+    parser.add_argument("--intrinsics", type=Path, default=Path("data/camera_intrinsics_s10e.npz"))
     parser.add_argument("--clips", type=int, default=20)
     parser.add_argument("--out", type=Path, default=Path("data/raw/e1"))
     parser.add_argument("--seed", type=int, default=0)

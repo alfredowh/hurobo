@@ -1,6 +1,6 @@
 # Evaluation results (persistent)
 
-Committed copies of benchmark runs. `results/` is scratch and git-ignored; anything worth keeping is copied here. Produced by `scripts/18_benchmark_policy.py`; read in `examples/11_smolvla_benchmark.ipynb`. Context and caveats: D-011 in `docs/design_decisions.md`.
+Committed copies of benchmark runs. `results/` is scratch and git-ignored; anything worth keeping is copied here. Produced by `scripts/18_benchmark_policy.py`; read in `examples/09_smolvla_benchmark.ipynb`. Context and caveats: D-011 in `docs/design_decisions.md`.
 
 | Folder | What | Date |
 |---|---|---|

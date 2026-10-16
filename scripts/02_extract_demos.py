@@ -9,7 +9,10 @@ ChArUco board on the tablet as the table frame, bowl pad and plate marker (exper
 docs/experiment_scaled_native.md); sizes come from the measurements file:
     uv run python scripts/02_extract_demos.py data/raw/e1/clip_*.mp4 \
         --setup data/raw/setup_01/measurements.yaml \
-        --intrinsics data/camera_intrinsics_s24.npz --out data/e1/demos
+        --intrinsics data/camera_intrinsics_s10e.npz --out data/e1/demos
+
+With `--cuts <folder>/cuts.json` (from `20_clean_clips.py` / `21_clip_cutter.py`) rejected clips are skipped
+and every other clip is extracted only inside its cut. Clips with no entry in the file are extracted whole.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from hurobo.camera import CameraIntrinsics
+from hurobo.clip_clean import CutStore
 from hurobo.demo import GraspSegmenter
 from hurobo.extract import ClipReport, ExtractionError, extract_demo
 from hurobo.markers import MarkerLayout
@@ -48,13 +52,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--table-size-m", type=float, default=0.10)
     parser.add_argument("--object-size-m", type=float, default=0.05)
     parser.add_argument(
-        "--marker-size-m", type=float, default=0.06, help="board mode: printed size of the pad/plate markers"
+        "--marker-size-m",
+        type=float,
+        default=RecordingSpec.marker_length_m,
+        help="board mode: measured side of the printed pad/plate markers",
     )
     parser.add_argument(
         "--pad-offset-m",
         type=float,
         default=0.115,
         help="board mode: bowl centre is this far along the pad marker's x axis",
+    )
+    parser.add_argument(
+        "--cuts", type=Path, default=None, help="cuts.json: skip rejected clips, extract inside each cut"
     )
     parser.add_argument("--close-threshold-m", type=float, default=0.03)
     parser.add_argument("--open-threshold-m", type=float, default=0.05)
@@ -88,10 +98,23 @@ def main() -> None:
             object_marker_length_m=args.object_size_m,
         )
 
+    cuts = CutStore(args.cuts) if args.cuts is not None else None
     reports: list[ClipReport] = []
     for video_path in args.videos:
+        cut = cuts.get(video_path) if cuts is not None else None
+        if cut is not None and not cut.accepted:
+            reports.append(ClipReport(source_video=video_path, reasons=["rejected in the cleaning step"]))
+            print(f"[SKIP] {video_path.name}: rejected in the cleaning step ({'; '.join(cut.reasons)})")
+            continue
         try:
-            demo, report = extract_demo(video_path, intrinsics, layout, segmenter, **extract_kwargs)
+            demo, report = extract_demo(
+                video_path,
+                intrinsics,
+                layout,
+                segmenter,
+                window_s=cut.window_s if cut is not None else None,
+                **extract_kwargs,
+            )
         except ExtractionError as error:
             report = ClipReport(source_video=video_path, reasons=[str(error)])
             reports.append(report)

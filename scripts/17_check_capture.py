@@ -5,7 +5,7 @@ Record about 10 s with the final setup (board on, pad and plate marker in place,
 place), copy it over, then:
 
     uv run python scripts/17_check_capture.py data/raw/e1/test.mp4 \
-        --intrinsics data/camera_intrinsics_s24.npz
+        --intrinsics data/camera_intrinsics_s10e.npz
 
 Exit code 0 when nothing needs fixing, 1 otherwise.
 """
@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("video", type=Path)
     parser.add_argument("--setup", type=Path, default=DEFAULT_MEASUREMENTS)
-    parser.add_argument("--intrinsics", type=Path, default=Path("data/camera_intrinsics_s24.npz"))
+    parser.add_argument("--intrinsics", type=Path, default=Path("data/camera_intrinsics_s10e.npz"))
     return parser.parse_args()
 
 
