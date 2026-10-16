@@ -1,0 +1,31 @@
+# Hand measurements for setup_01. Lengths in metres. Items marked TODO are not measured yet.
+
+table:
+  width_m: 1.445   # 4 x 0.30 + 0.245, along the long side (interpretation: confirm)
+  depth_m: 0.60    # 2 x 0.30
+  # Board corner -> table edges, in the board frame (x along the 7-square side, y along the 5-square side).
+  # Board origin = outer top-left corner of the grid, board upright. It sits in the table's top-left corner:
+  # 3 cm from the left edge, 2 cm from the top (far) edge. Long side (1.445 m) runs along board x.
+  # Table-frame coordinates of the edges (x right, y toward the top of the board image, z up):
+  left_edge_x_m: -0.03
+  right_edge_x_m: 1.415
+  top_edge_y_m: 0.02
+  near_edge_y_m: -0.58
+  centre_xy_m: [0.6925, -0.28]   # --table-centre
+  inscribed_radius_m: 0.30       # --table-radius if a cylinder crop is used
+
+charuco:
+  squares_x: 7
+  squares_y: 5
+  square_length_m: 0.037   # measured on the tablet screen 2026-10-16 (was 0.025 from an earlier, unmeasured value)
+  marker_length_m: 0.0275  # derived: 0.037 * 26/35 (generate-board ratio); NOT measured, verify with a ruler
+  display: tablet          # screen glare risk; board surface sits above the table by the tablet thickness
+  tablet_thickness_m: 0.008 # screen surface is z = 0; the tabletop is this far below
+
+plate:
+  diameter_m: 0.255
+  height_m: 0.028
+
+bowl:
+  diameter_m: 0.138
+  height_m: 0.067  
