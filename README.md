@@ -27,11 +27,8 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 | Constraint | Effect on the design |
 |---|---|
-| One 16 GB GPU | Use a 450M-parameter VLA in bf16. Do not use 3B or 7B models. Use ACT as a fallback. |
-| NVIDIA driver 560.35 (CUDA 12.6 maximum) | Install PyTorch from the cu126 index. Isaac Sim 5 and PolaRiS do not work. Use MuJoCo. |
-| About 7 days. Long work days only on Friday to Sunday. | Start long jobs (generation, training) at the end of a short session. Each block has a gate and a fallback. |
-| The data must come from me, with a phone | About 15 third-person clips on a tripod. One camera. No depth sensor. No motion-capture glove. |
-| Public repository | Do not commit large files. The repository contains scripts and a link to the dataset on the Hugging Face Hub. |
+| One 16 GB GPU | Use a 450M-parameter VLA in bf16. |
+| The data must come from a phone | About 15 third-person clips on a tripod. One camera. No depth sensor. No motion-capture glove. |
 
 **Limitations**
 
