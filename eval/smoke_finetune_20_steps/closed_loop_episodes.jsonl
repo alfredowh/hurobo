@@ -1,0 +1,1 @@
+{"cell": "smoke20|scaled|10", "checkpoint": "smoke20", "replan_every": 10, "condition": "scaled", "episode": 0, "success": false, "steps": 350, "min_eef_bowl_m": 0.3732546475008363, "max_bowl_lift_m": 0.0, "final_bowl_plate_xy_m": 0.4715096902830398, "policy_calls": 35}

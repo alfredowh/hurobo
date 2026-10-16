@@ -1,0 +1,13 @@
+lerobot/smolvla_libero|scaled|50 ep0: fail (300 steps, bowl lifted 0 cm)
+lerobot/smolvla_libero|scaled|50 ep1: fail (300 steps, bowl lifted 0 cm)
+lerobot/smolvla_libero|scaled|50 ep2: fail (300 steps, bowl lifted 18 cm)
+lerobot/smolvla_libero|scaled|50 ep3: fail (300 steps, bowl lifted 0 cm)
+lerobot/smolvla_libero|scaled|50 ep4: fail (300 steps, bowl lifted 5 cm)
+                   checkpoint condition  replan_every  episodes  successes  success_rate  ci_low  ci_high  lifted  mean_steps_success  median_min_eef_bowl_cm
+HuggingFaceVLA/smolvla_libero     clean            10        10          0          0.00    0.00     0.28    0.00                 NaN                   13.65
+HuggingFaceVLA/smolvla_libero    scaled            10        10          0          0.00    0.00     0.28    0.00                 NaN                   14.62
+HuggingFaceVLA/smolvla_libero     stock            10        10          8          0.80    0.49     0.94    0.90              105.00                    5.54
+       lerobot/smolvla_libero     clean            10        10          0          0.00    0.00     0.28    0.20                 NaN                   15.62
+       lerobot/smolvla_libero    scaled            10        10          0          0.00    0.00     0.28    0.20                 NaN                   14.61
+       lerobot/smolvla_libero    scaled            50         5          0          0.00    0.00     0.43    0.40                 NaN                   13.47
+       lerobot/smolvla_libero     stock            10        10         10          1.00    0.72     1.00    1.00               77.60                    4.10

@@ -1,0 +1,2 @@
+lerobot/smolvla_libero: gripper accuracy 0.56, MAE per dim [0.37, 0.19, 0.5, 0.01, 0.05, 0.01, 0.89] (zero-action baseline [0.08, 0.17, 0.14, 0.0, 0.01, 0.0, 1.0])
+HuggingFaceVLA/smolvla_libero: gripper accuracy 0.44, MAE per dim [0.25, 0.19, 0.41, 0.01, 0.05, 0.02, 1.11] (zero-action baseline [0.08, 0.17, 0.14, 0.0, 0.01, 0.0, 1.0])

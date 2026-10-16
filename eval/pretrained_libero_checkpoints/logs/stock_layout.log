@@ -1,0 +1,123 @@
+[robosuite WARNING] No private macro file found! (__init__.py:7)
+WARNING:robosuite_logs:No private macro file found!
+[robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+WARNING:robosuite_logs:It is recommended to use a private macro file
+[robosuite WARNING] To setup, run: python /home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py (__init__.py:9)
+WARNING:robosuite_logs:To setup, run: python /home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/robosuite/scripts/setup_macros.py
+`torch_dtype` is deprecated! Use `dtype` instead!
+Creating LIBERO envs | suites=['libero_goal'] | n_envs(per task)=1 | init_states=True
+Restricting to task_ids=[8]
+[info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+Built vec env | suite=libero_goal | task_id=8 | n_envs=1
+Loading  HuggingFaceTB/SmolVLM2-500M-Video-Instruct weights ...
+Loading weights:   0%|          | 0/489 [00:00<?, ?it/s]Loading weights:  19%|█▉        | 95/489 [00:00<00:00, 916.14it/s]Loading weights:  39%|███▉      | 193/489 [00:00<00:00, 930.54it/s]Loading weights:  59%|█████▊    | 287/489 [00:00<00:00, 926.22it/s]Loading weights:  98%|█████████▊| 477/489 [00:00<00:00, 1301.42it/s]Loading weights: 100%|██████████| 489/489 [00:00<00:00, 1183.70it/s]
+Reducing the number of VLM layers to 16 ...
+Local assets not found. Downloading from HuggingFace Hub...
+Assets already downloaded at /home/eeschner/.cache/libero/assets
+lerobot/smolvla_libero|clean_stock_layout|10 ep0: SUCCESS (76 steps, bowl lifted 12 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep1: SUCCESS (120 steps, bowl lifted 11 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep2: fail (300 steps, bowl lifted 13 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep3: SUCCESS (73 steps, bowl lifted 11 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep4: fail (300 steps, bowl lifted 10 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep5: SUCCESS (71 steps, bowl lifted 9 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep6: SUCCESS (69 steps, bowl lifted 13 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep7: fail (300 steps, bowl lifted 10 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep8: SUCCESS (75 steps, bowl lifted 11 cm)
+lerobot/smolvla_libero|clean_stock_layout|10 ep9: fail (300 steps, bowl lifted 12 cm)
+/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/robosuite/utils/binding_utils.py:1010: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+  self.qpos[addr] = value
+lerobot/smolvla_libero|scaled_stock_layout|10 ep0: fail (300 steps, bowl lifted 0 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep1: fail (300 steps, bowl lifted 9 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep2: fail (300 steps, bowl lifted 8 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep3: fail (300 steps, bowl lifted 1 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep4: fail (300 steps, bowl lifted 11 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep5: fail (300 steps, bowl lifted 2 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep6: fail (300 steps, bowl lifted 0 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep7: fail (300 steps, bowl lifted 2 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep8: fail (300 steps, bowl lifted 10 cm)
+lerobot/smolvla_libero|scaled_stock_layout|10 ep9: fail (300 steps, bowl lifted 2 cm)
+Loading  HuggingFaceTB/SmolVLM2-500M-Instruct weights ...
+Loading weights:   0%|          | 0/489 [00:00<?, ?it/s]Loading weights:  57%|█████▋    | 280/489 [00:00<00:00, 2790.41it/s]Loading weights: 100%|██████████| 489/489 [00:00<00:00, 3439.93it/s]
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep0: fail (300 steps, bowl lifted 1 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep1: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep2: fail (300 steps, bowl lifted 2 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep3: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep4: SUCCESS (132 steps, bowl lifted 7 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep5: SUCCESS (89 steps, bowl lifted 8 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep6: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep7: fail (300 steps, bowl lifted 1 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep8: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|clean_stock_layout|10 ep9: SUCCESS (88 steps, bowl lifted 8 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep0: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep1: fail (300 steps, bowl lifted 2 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep2: fail (300 steps, bowl lifted 2 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep3: fail (300 steps, bowl lifted 1 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep4: fail (300 steps, bowl lifted 1 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep5: fail (300 steps, bowl lifted 1 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep6: fail (300 steps, bowl lifted 0 cm)
+HuggingFaceVLA/smolvla_libero|scaled_stock_layout|10 ep7: fail (300 steps, bowl lifted 0 cm)
+Traceback (most recent call last):
+  File "/home/eeschner/alfredo/workspace/hurobo/scripts/18_benchmark_policy.py", line 99, in <module>
+    main()
+  File "/home/eeschner/alfredo/workspace/hurobo/scripts/18_benchmark_policy.py", line 81, in main
+    summary = benchmark.run(specs, args.conditions, args.replan, args.episodes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/src/hurobo/benchmark.py", line 107, in run
+    self._run_cell(
+  File "/home/eeschner/alfredo/workspace/hurobo/src/hurobo/benchmark.py", line 127, in _run_cell
+    result = runner.run_episode(agent, cell.condition, episode, video_path=video)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/src/hurobo/policy_rollout.py", line 309, in run_episode
+    action = agent.act(obs, task_text)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/src/hurobo/policy_rollout.py", line 153, in act
+    action = self._postprocessor(self._policy.select_action(batch))
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py", line 263, in select_action
+    actions = self._get_action_chunk(batch, noise)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py", line 212, in _get_action_chunk
+    actions = self.model.sample_actions(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py", line 759, in sample_actions
+    return euler_integrate(
+           ^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/common/flow_matching.py", line 115, in euler_integrate
+    v_t = denoise_step_partial_call(x_t)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/common/flow_matching.py", line 103, in denoise_step_partial_call
+    return denoise_fn(input_x_t, current_timestep)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py", line 760, in <lambda>
+    lambda input_x_t, current_timestep: self.denoise_step(
+                                        ^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/modeling_smolvla.py", line 796, in denoise_step
+    outputs_embeds, _ = self.vlm_with_expert.forward(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/smolvlm_with_expert.py", line 456, in forward
+    att_outputs, past_key_values = self.forward_cross_attn_layer(
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/smolvlm_with_expert.py", line 379, in forward_cross_attn_layer
+    expert_query_states = apply_rope(expert_query_state, expert_position_id)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/lerobot/policies/smolvla/smolvlm_with_expert.py", line 51, in apply_rope
+    timescale = max_wavelength**freq_exponents
+                ~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 47, in wrapped
+    return f(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/eeschner/alfredo/workspace/hurobo/.venv/lib/python3.12/site-packages/torch/_tensor.py", line 1155, in __rpow__
+    return torch.pow(other, self)
+           ^^^^^^^^^^^^^^^^^^^^^^
+torch.AcceleratorError: CUDA error: unspecified launch failure
+Search for `cudaErrorLaunchFailure' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+

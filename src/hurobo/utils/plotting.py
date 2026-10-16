@@ -155,21 +155,28 @@ def plot_image_row(
     title: str | None = None,
     height_in: float = 4.4,
     cmap: str | None = None,
+    columns: int | None = None,
 ) -> Figure:
-    """Titled images side by side (one panel works too).
+    """Titled images side by side (one panel works too), optionally wrapped into several rows.
 
     Args:
         panels: panel title -> image (RGB, or 2D with `cmap`).
         title: figure title.
-        height_in: figure height in inches; width follows the panels' aspect.
+        height_in: height of one panel row in inches; width follows the panels' aspect.
         cmap: matplotlib colormap for 2D images, e.g. "gray".
+        columns: panels per row; all in one row if None.
     """
-    aspects = [image.shape[1] / image.shape[0] for image in panels.values()]
-    fig, axes = plt.subplots(1, len(panels), figsize=(height_in * sum(aspects), height_in), squeeze=False)
-    for ax, (name, image) in zip(axes[0], panels.items(), strict=True):
+    columns = columns or len(panels)
+    rows = -(-len(panels) // columns)
+    aspect = max(image.shape[1] / image.shape[0] for image in panels.values())
+    fig, axes = plt.subplots(
+        rows, columns, figsize=(height_in * aspect * columns, height_in * rows), squeeze=False
+    )
+    for ax in axes.flat:
+        ax.axis("off")
+    for ax, (name, image) in zip(axes.flat, panels.items(), strict=False):
         ax.imshow(image, cmap=cmap)
         ax.set_title(name)
-        ax.axis("off")
     if title:
         fig.suptitle(title)
     fig.tight_layout()

@@ -1,0 +1,2 @@
+checkpoint,condition,replan_every,episodes,successes,success_rate,ci_low,ci_high,lifted,mean_steps_success,median_min_eef_bowl_cm
+smoke20,scaled,10,1,0,0.0,0.0,0.7934567085261071,0.0,,37.32546475008363

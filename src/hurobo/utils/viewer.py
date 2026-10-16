@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from hurobo.capture_plan import CameraPlacement, PlannedClip
     from hurobo.hand import TrackedFrame
     from hurobo.real_setup import RealSetup
+    from hurobo.recording import CaptureDiagnosis
     from hurobo.scan import CropCylinder
     from hurobo.scan_crop import FloorPlane
     from hurobo.scan_sweep import SweepResult
@@ -1084,6 +1085,109 @@ def teleop_tracking_figure(trace: TeleopTrace, title: str = "Teleoperation track
     return figure
 
 
+def capture_diagnosis_figure(diagnosis: CaptureDiagnosis, title: str | None = None) -> go.Figure:
+    """Timeline of a test clip: what was detected in each frame, and the pinch against its thresholds.
+
+    Top: one lane per thing the extraction needs (board, bowl pad, plate marker, hand); a gap in a lane is
+    a frame where it was not found. The first second, where the markers must be visible, is shaded, and the
+    longest hand dropout is marked. Middle: pinch aperture with the close / open thresholds; a grasp needs
+    it to dip under the lower line, a release to rise over the upper one. Bottom: PnP reprojection error of
+    the hand fit (large means the hand pose, and so the depth, is unreliable).
+
+    Args:
+        diagnosis: output of `hurobo.recording.diagnose_capture`.
+        title: figure title; defaults to the clip name.
+    """
+    t = diagnosis.times_s
+    spec = diagnosis.spec
+    lanes = {
+        "hand": diagnosis.hand_found,
+        f"plate marker (id {spec.plate_marker_id})": diagnosis.marker_found(spec.plate_marker_id),
+        f"bowl pad (id {spec.bowl_marker_id})": diagnosis.marker_found(spec.bowl_marker_id),
+        "board (enough corners)": diagnosis.board_found,
+    }
+    figure = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.4, 0.35, 0.25],
+        vertical_spacing=0.06,
+        subplot_titles=("found in this frame", "pinch aperture (cm)", "hand-fit reprojection error (px)"),
+    )
+    for level, (name, found) in enumerate(lanes.items()):
+        figure.add_trace(
+            go.Scatter(
+                x=t[found],
+                y=np.full(found.sum(), level),
+                mode="markers",
+                marker={"symbol": "square", "size": 7, "color": "seagreen"},
+                name=name,
+                showlegend=False,
+                hovertemplate="%{x:.2f} s<extra>" + name + "</extra>",
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=t[~found],
+                y=np.full((~found).sum(), level),
+                mode="markers",
+                marker={"symbol": "x", "size": 6, "color": "crimson"},
+                name=f"{name}: missing",
+                showlegend=False,
+                hovertemplate="%{x:.2f} s missing<extra>" + name + "</extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    figure.update_yaxes(tickvals=list(range(len(lanes))), ticktext=list(lanes), row=1, col=1)
+    figure.add_vrect(
+        x0=t[0],
+        x1=t[0] + 1.0,
+        fillcolor="royalblue",
+        opacity=0.1,
+        line_width=0,
+        annotation_text="markers must be seen",
+        annotation_position="top left",
+        row=1,
+        col=1,
+    )
+    start, stop = diagnosis.hand_gap()
+    if stop > start:
+        for row in (1, 2, 3):
+            figure.add_vrect(
+                x0=t[start - 1],
+                x1=t[min(stop, len(t) - 1)],
+                fillcolor="crimson",
+                opacity=0.12,
+                line_width=0,
+                row=row,
+                col=1,
+                annotation_text="longest hand dropout" if row == 1 else None,
+            )
+    figure.add_trace(
+        go.Scatter(x=t, y=diagnosis.aperture_m * 100, mode="lines+markers", showlegend=False),
+        row=2,
+        col=1,
+    )
+    for threshold, label in (
+        (diagnosis.close_threshold_m, "grasp below"),
+        (diagnosis.open_threshold_m, "release above"),
+    ):
+        figure.add_hline(y=threshold * 100, line_dash="dash", annotation_text=label, row=2, col=1)
+    figure.add_trace(
+        go.Scatter(x=t, y=diagnosis.reprojection_px, mode="lines+markers", showlegend=False), row=3, col=1
+    )
+    figure.update_xaxes(title_text="time (s)", row=3, col=1)
+    figure.update_layout(
+        title=title or f"Capture check: {diagnosis.video.name}",
+        height=760,
+        margin={"l": 40, "r": 10, "t": 80, "b": 40},
+    )
+    return figure
+
+
 _SPLAT_VIEWER_TEMPLATE = Path(__file__).with_name("splat_viewer.html")
 
 
@@ -1232,4 +1336,150 @@ def capture_plan_figure(
         yaxis={"title": "table y (m), away from you"},
         showlegend=False,
     )
+    return figure
+
+
+def reach_map_figure(
+    xs: np.ndarray, ys: np.ndarray, errors_m: dict[str, np.ndarray], title: str = "Panda reach"
+) -> go.Figure:
+    """Heat maps of the end-effector position error over a grid of world (x, y), one panel per height.
+
+    Args:
+        xs: world x values, shape (X,).
+        ys: world y values, shape (Y,).
+        errors_m: panel title -> errors in metres, shape (Y, X), from `hurobo.reach.measure_reach_map`.
+        title: figure title.
+    """
+    figure = make_subplots(rows=1, cols=len(errors_m), subplot_titles=list(errors_m), shared_yaxes=True)
+    for column, errors in enumerate(errors_m.values(), start=1):
+        figure.add_trace(
+            go.Heatmap(
+                x=xs,
+                y=ys,
+                z=100 * np.minimum(errors, 0.10),
+                zmin=0,
+                zmax=10,
+                colorscale="RdYlGn_r",
+                colorbar={"title": "error (cm)"} if column == len(errors_m) else None,
+                showscale=column == len(errors_m),
+                hovertemplate="x %{x:.2f} y %{y:.2f}: %{z:.1f} cm<extra></extra>",
+            ),
+            row=1,
+            col=column,
+        )
+        figure.update_xaxes(title_text="world x (m), away from the robot base", row=1, col=column)
+    figure.update_yaxes(title_text="world y (m)", row=1, col=1)
+    figure.update_layout(title=title, height=420)
+    return figure
+
+
+def size_comparison_figure(
+    rows: list[dict[str, float | str]], title: str = "Real vs LIBERO vs scaled"
+) -> go.Figure:
+    """Grouped bars of diameter and height: the measured object, LIBERO's stock one, and the scaled sim one.
+
+    Args:
+        rows: from `hurobo.scaled_native.ObjectScales.comparison`.
+        title: figure title.
+    """
+    figure = make_subplots(rows=1, cols=2, subplot_titles=["diameter (cm)", "height (cm)"])
+    series = (
+        ("measurements.yaml", "real", "#2a9d8f"),
+        ("LIBERO stock", "LIBERO", "#9aa0a6"),
+        ("scaled in the sim", "sim", "#e76f51"),
+    )
+    names = [str(row["object"]) for row in rows]
+    for column, quantity in enumerate(("diameter", "height"), start=1):
+        for label, key, colour in series:
+            values = [float(row[f"{key} {quantity}"]) for row in rows]
+            figure.add_trace(
+                go.Bar(
+                    x=names,
+                    y=values,
+                    name=label,
+                    marker_color=colour,
+                    text=[f"{v:.1f}" for v in values],
+                    textposition="outside",
+                    showlegend=column == 1,
+                ),
+                row=1,
+                col=column,
+            )
+    figure.update_layout(title=title, barmode="group", height=420)
+    return figure
+
+
+def benchmark_success_figure(summary: pd.DataFrame, title: str = "Closed-loop success rate") -> go.Figure:
+    """Success rate per checkpoint, scene condition and replan interval, with 95 % Wilson intervals.
+
+    Args:
+        summary: from `hurobo.benchmark.summarize_rows` (needs success_rate, ci_low, ci_high, episodes).
+        title: figure title.
+
+    Returns:
+        One group of bars per condition, one bar per (checkpoint, replan interval); hover shows n.
+    """
+    figure = go.Figure()
+    for (checkpoint, replan), group in summary.groupby(["checkpoint", "replan_every"]):
+        figure.add_trace(
+            go.Bar(
+                name=f"{checkpoint} (replan {replan})",
+                x=group["condition"],
+                y=100 * group["success_rate"],
+                error_y={
+                    "type": "data",
+                    "symmetric": False,
+                    "array": 100 * (group["ci_high"] - group["success_rate"]),
+                    "arrayminus": 100 * (group["success_rate"] - group["ci_low"]),
+                },
+                customdata=group[["successes", "episodes"]],
+                hovertemplate="%{y:.0f} % (%{customdata[0]}/%{customdata[1]})<extra>%{fullData.name}</extra>",
+            )
+        )
+    figure.update_layout(
+        title=title, yaxis_title="success (%)", yaxis_range=[0, 105], barmode="group", legend_title="policy"
+    )
+    return figure
+
+
+def failure_stage_figure(summary: pd.DataFrame, title: str = "How far episodes got") -> go.Figure:
+    """Share of episodes in which the bowl was lifted and in which the task succeeded, per cell.
+
+    Separates 'never grasped' from 'grasped but misplaced'.
+
+    Args:
+        summary: from `hurobo.benchmark.summarize_rows`.
+        title: figure title.
+    """
+    labels = [f"{r.checkpoint} | {r.condition} | {r.replan_every}" for r in summary.itertuples()]
+    figure = go.Figure()
+    figure.add_trace(go.Bar(name="bowl lifted > 3 cm", x=labels, y=100 * summary["lifted"]))
+    figure.add_trace(go.Bar(name="success", x=labels, y=100 * summary["success_rate"]))
+    figure.update_layout(title=title, yaxis_title="episodes (%)", barmode="group", xaxis_tickangle=-40)
+    return figure
+
+
+def open_loop_figure(
+    results: list[dict], title: str = "Open-loop action error against demonstrations"
+) -> go.Figure:
+    """Per-dimension action error of each checkpoint beside the do-nothing baseline, and along the chunk.
+
+    Args:
+        results: dicts from `hurobo.benchmark.OpenLoopResult` (as asdict).
+        title: figure title.
+    """
+    figure = make_subplots(rows=1, cols=2, subplot_titles=("MAE per action dimension", "MAE along the chunk"))
+    dims = ["dx", "dy", "dz", "drx", "dry", "drz", "gripper"]
+    for result in results:
+        figure.add_trace(go.Bar(name=result["checkpoint"], x=dims, y=result["mae_per_dim"]), row=1, col=1)
+        figure.add_trace(
+            go.Scatter(name=result["checkpoint"], y=result["mae_by_horizon"], showlegend=False), row=1, col=2
+        )
+    figure.add_trace(
+        go.Bar(name="zero action", x=dims, y=results[0]["zero_mae_per_dim"], marker_color="lightgrey"),
+        row=1,
+        col=1,
+    )
+    figure.update_xaxes(title_text="step in the chunk", row=1, col=2)
+    figure.update_layout(title=title, barmode="group")
     return figure

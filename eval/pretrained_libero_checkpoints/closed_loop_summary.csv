@@ -1,0 +1,8 @@
+checkpoint,condition,replan_every,episodes,successes,success_rate,ci_low,ci_high,lifted,mean_steps_success,median_min_eef_bowl_cm
+HuggingFaceVLA/smolvla_libero,clean,10,10,0,0.0,0.0,0.2775401687666166,0.0,,13.650042438753943
+HuggingFaceVLA/smolvla_libero,scaled,10,10,0,0.0,0.0,0.2775401687666166,0.0,,14.62300094961699
+HuggingFaceVLA/smolvla_libero,stock,10,10,8,0.8,0.49015684672072335,0.9433190520193067,0.9,105.0,5.5418399659469415
+lerobot/smolvla_libero,clean,10,10,0,0.0,0.0,0.2775401687666166,0.2,,15.62466050150652
+lerobot/smolvla_libero,scaled,10,10,0,0.0,0.0,0.2775401687666166,0.2,,14.610670108603435
+lerobot/smolvla_libero,scaled,50,5,0,0.0,0.0,0.43449149475208104,0.4,,13.466769291677982
+lerobot/smolvla_libero,stock,10,10,10,1.0,0.7224598312333834,1.0,1.0,77.6,4.10221884399261
