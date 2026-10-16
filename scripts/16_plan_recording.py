@@ -5,7 +5,8 @@ Run with:
     uv run python scripts/16_plan_recording.py --clips 20 --out data/raw/e1
 
 Writes into --out: plan.csv (one row per clip), plan.html (interactive top view), plan_sheet.png (one small
-top view per clip, to print and keep next to the table), bowl_pad.png and plate_marker.png (print at 100 %).
+top view per clip, to print and keep next to the table), bowl_pad.png and plate_marker.png (print at 100 %),
+charuco_board.png (the table frame, shown 1:1 on the tablet) and table_marker.png (single ArUco id 20, 10 cm).
 """
 
 from __future__ import annotations
@@ -17,9 +18,15 @@ from pathlib import Path
 import cv2
 
 from hurobo.camera import CameraIntrinsics
-from hurobo.capture_plan import CameraPlacementSearch, CapturePlanner, workspace_rect_table
+from hurobo.capture_plan import CameraPlacementSearch, CapturePlanner, plan_rows, workspace_rect_table
+from hurobo.markers import render_marker_image
 from hurobo.real_setup import DEFAULT_MEASUREMENTS, RealSetup
-from hurobo.recording import RecordingSpec, render_bowl_pad, render_plate_marker
+from hurobo.recording import (
+    RecordingSpec,
+    render_board_screen,
+    render_bowl_pad,
+    render_plate_marker,
+)
 from hurobo.scaled_native import Workspace
 from hurobo.utils.plotting import plot_clip_sheet
 from hurobo.utils.viewer import capture_plan_figure
@@ -34,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clips", type=int, default=20)
     parser.add_argument("--out", type=Path, default=Path("data/raw/e1"))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--tablet-ppi", type=float, default=217.0, help="pixels per inch of the tablet")
+    parser.add_argument("--tablet-screen", default="1800x1200", help="tablet resolution WxH")
     parser.add_argument(
         "--min-board-px",
         type=float,
@@ -67,35 +76,11 @@ def main() -> None:
 
     planner = CapturePlanner(setup, workspace, seed=args.seed)
     clips = planner.plan(args.clips)
+    rows = plan_rows(clips, setup)
     with (args.out / "plan.csv").open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(
-            [
-                "clip",
-                "bowl_x_table_m",
-                "bowl_y_table_m",
-                "bowl_from_left_edge_m",
-                "bowl_from_near_edge_m",
-                "plate_x_table_m",
-                "plate_y_table_m",
-                "plate_from_left_edge_m",
-                "plate_from_near_edge_m",
-                "hand_start",
-                "grasp_side",
-            ]
-        )
-        for clip in clips:
-            bowl_edges = clip.from_table_edges_m(clip.bowl_xy_table, setup)
-            plate_edges = clip.from_table_edges_m(clip.plate_xy_table, setup)
-            writer.writerow(
-                [
-                    f"clip_{clip.index:03d}",
-                    *(f"{v:.3f}" for v in (*clip.bowl_xy_table, *bowl_edges)),
-                    *(f"{v:.3f}" for v in (*clip.plate_xy_table, *plate_edges)),
-                    clip.hand_start.name,
-                    clip.grasp_side,
-                ]
-            )
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
 
     figure = capture_plan_figure(
         setup,
@@ -109,7 +94,11 @@ def main() -> None:
     )
     cv2.imwrite(str(args.out / "bowl_pad.png"), render_bowl_pad(spec, setup.bowl.diameter_m))
     cv2.imwrite(str(args.out / "plate_marker.png"), render_plate_marker(spec))
-    print(f"\nwrote plan.csv, plan.html, plan_sheet.png, bowl_pad.png, plate_marker.png to {args.out}")
+    screen = tuple(int(v) for v in args.tablet_screen.lower().split("x"))
+    cv2.imwrite(str(args.out / "charuco_board.png"), render_board_screen(setup, args.tablet_ppi, screen))
+    # Not used by E1 (the board is the table frame); the original single-marker table frame of scripts 02/13.
+    cv2.imwrite(str(args.out / "table_marker.png"), render_marker_image(20))
+    print(f"\nwrote the plan, the sheets and all marker images to {args.out}")
     print(
         "print bowl_pad.png and plate_marker.png at 100 % (A4 landscape); the black square must measure 60 mm"
     )

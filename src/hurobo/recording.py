@@ -13,7 +13,15 @@ from hurobo.demo import GraspSegmenter, HumanDemo
 from hurobo.extract import ClipReport, ExtractionConfig, ExtractionError, extract_demo
 from hurobo.markers import BoardMarkerPoseEstimator, MarkerLayout
 from hurobo.real_setup import RealSetup
-from hurobo.utils.video import read_frames_with_timestamps
+from hurobo.utils.stats import longest_true_run
+from hurobo.utils.video import (
+    VideoWriter,
+    caption_frame,
+    draw_hand_skeleton,
+    draw_outlined_text,
+    get_video_fps,
+    read_frames_with_timestamps,
+)
 
 A4_LANDSCAPE_MM = (297.0, 210.0)
 
@@ -290,3 +298,369 @@ def check_capture(
     except ExtractionError as error:
         report.problems.append(str(error))
     return report
+
+
+@dataclass
+class CaptureDiagnosis:
+    """Everything the capture check looks at, per frame, to see where a test clip goes wrong.
+
+    Attributes:
+        video: the clip.
+        report: the pass/fail report of `check_capture`.
+        times_s: shape (N,), frame times.
+        board_corners: shape (N,), ChArUco corners found (the pose needs `MIN_CORNERS`).
+        marker_ids: ArUco ids detected in each frame (the board's own markers included).
+        marker_corners: per frame, one (4, 2) pixel array per detected marker.
+        hand_landmarks_px: per frame, shape (21, 2), or None where no hand was detected.
+        aperture_m: shape (N,), thumb-index distance, NaN where no hand was detected.
+        reprojection_px: shape (N,), PnP reprojection error of the hand fit, NaN where no hand.
+        tcp_depth_m: shape (N,), distance of the pinch point along the camera axis, NaN where no hand.
+        spec: markers the clip was checked against.
+        close_threshold_m: aperture below this counts as a grasp.
+        open_threshold_m: aperture above this counts as a release.
+        min_board_corners: corners needed for a board pose.
+    """
+
+    video: Path
+    report: CaptureCheckReport
+    times_s: np.ndarray
+    board_corners: np.ndarray
+    marker_ids: list[list[int]]
+    marker_corners: list[list[np.ndarray]]
+    hand_landmarks_px: list[np.ndarray | None]
+    aperture_m: np.ndarray
+    reprojection_px: np.ndarray
+    tcp_depth_m: np.ndarray
+    spec: RecordingSpec
+    close_threshold_m: float
+    open_threshold_m: float
+    min_board_corners: int
+
+    @property
+    def board_found(self) -> np.ndarray:
+        """shape (N,) bool, enough board corners for a pose."""
+        return self.board_corners >= self.min_board_corners
+
+    @property
+    def hand_found(self) -> np.ndarray:
+        """shape (N,) bool, a hand was detected."""
+        return ~np.isnan(self.aperture_m)
+
+    def marker_found(self, marker_id: int) -> np.ndarray:
+        """shape (N,) bool, the marker with this id was detected."""
+        return np.array([marker_id in ids for ids in self.marker_ids])
+
+    def hand_gap(self) -> tuple[int, int]:
+        """Frame range (start, stop) of the longest hand dropout between the first and last detection."""
+        found = np.flatnonzero(self.hand_found)
+        if len(found) < 2:
+            return 0, 0
+        first, last = found[0], found[-1]
+        start, stop = longest_true_run(~self.hand_found[first : last + 1])
+        return (first + start, first + stop) if stop > start else (0, 0)
+
+    def key_moments(self) -> dict[str, int]:
+        """Frames worth looking at, label -> frame index (later labels never repeat an earlier frame)."""
+        moments = {"first frame": 0, "at 1 s": int(np.searchsorted(self.times_s, self.times_s[0] + 1.0))}
+        start, stop = self.hand_gap()
+        if stop > start:
+            moments.update(
+                {
+                    "hand last seen": start - 1,
+                    "hand lost (middle of longest gap)": (start + stop) // 2,
+                    "hand back": stop,
+                }
+            )
+        if self.hand_found.any():
+            moments["tightest pinch"] = int(np.nanargmin(self.aperture_m))
+            moments["widest pinch"] = int(np.nanargmax(self.aperture_m))
+        seen: set[int] = set()
+        return {
+            label: min(index, len(self.times_s) - 1)
+            for label, index in moments.items()
+            if not (index in seen or seen.add(index))
+        }
+
+    def annotated_frames(self, indices: dict[str, int]) -> dict[str, np.ndarray]:
+        """RGB frames with the detections drawn: marker outlines with ids, hand skeleton, and what is missing.
+
+        Args:
+            indices: label -> frame index, e.g. `key_moments()`.
+
+        Returns:
+            label -> RGB image, with a caption that says what the pipeline saw in that frame.
+        """
+        wanted = {index: label for label, index in indices.items()}
+        panels: dict[str, np.ndarray] = {}
+        expected = {"bowl pad": self.spec.bowl_marker_id, "plate marker": self.spec.plate_marker_id}
+        for index, (frame, _) in enumerate(read_frames_with_timestamps(self.video)):
+            if index not in wanted:
+                continue
+            self._draw_detections(frame, index, 1.0)
+            missing = [
+                name for name, marker_id in expected.items() if marker_id not in self.marker_ids[index]
+            ]
+            notes = [f"t={self.times_s[index]:.2f}s", f"board corners {self.board_corners[index]}"]
+            notes += [f"NO {name}" for name in missing]
+            if self.hand_landmarks_px[index] is None:
+                notes.append("NO hand")
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            panels[wanted[index]] = cv2.cvtColor(
+                caption_frame(rgb, " | ".join(notes), 1.0), cv2.COLOR_BGR2RGB
+            )
+        return {label: panels[label] for label in indices if label in panels}
+
+    def write_video(self, out_path: Path, width_px: int = 960) -> Path:
+        """Diagnostic video: every frame with what was detected drawn on it and what is missing flagged.
+
+        Marker outlines carry their role (bowl pad, plate marker, board), the hand skeleton is drawn when
+        found, a red banner appears when it is lost, a status panel lists board / pad / plate / hand / pinch,
+        and a strip along the bottom shows the whole clip's detections with a cursor at the current frame.
+
+        Args:
+            out_path: output .mp4; the parent folder is created.
+            width_px: output width; the height keeps the aspect ratio.
+
+        Returns:
+            `out_path`.
+        """
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        writer = None
+        try:
+            for index, (frame, _) in enumerate(read_frames_with_timestamps(self.video)):
+                scale = width_px / frame.shape[1]
+                frame = cv2.resize(
+                    frame, (width_px, round(frame.shape[0] * scale)), interpolation=cv2.INTER_AREA
+                )
+                self._draw_detections(frame, index, scale)
+                self._draw_status(frame, index)
+                if writer is None:
+                    writer = VideoWriter(
+                        out_path, get_video_fps(self.video), (frame.shape[1], frame.shape[0])
+                    )
+                writer.write(frame)
+        finally:
+            if writer is not None:
+                writer.close()
+        return out_path
+
+    def _marker_roles(self) -> dict[int, tuple[str, tuple[int, int, int]]]:
+        """Marker id -> (label, BGR colour) for the objects; any other id belongs to the board."""
+        return {
+            self.spec.bowl_marker_id: ("bowl pad", (0, 140, 255)),
+            self.spec.plate_marker_id: ("plate marker", (255, 0, 255)),
+        }
+
+    def _draw_detections(self, frame_bgr: np.ndarray, index: int, scale: float) -> None:
+        """Marker outlines (coloured by role) and the hand skeleton on a frame, in place.
+
+        Args:
+            frame_bgr: frame resized by `scale` relative to the video.
+            index: frame index.
+            scale: factor from video pixels to `frame_bgr` pixels.
+        """
+        roles = self._marker_roles()
+        for marker_id, corners in zip(self.marker_ids[index], self.marker_corners[index], strict=True):
+            label, colour = roles.get(marker_id, (None, (200, 200, 0)))
+            points = (np.asarray(corners).reshape(4, 2) * scale).round().astype(np.int32)
+            cv2.polylines(frame_bgr, [points], True, colour, 2 if label else 1, cv2.LINE_AA)
+            if label:
+                draw_outlined_text(
+                    frame_bgr,
+                    f"{label} (id {marker_id})",
+                    tuple(points[0] - [0, 8]),
+                    0.55 * scale + 0.1,
+                    colour,
+                )
+        if self.hand_landmarks_px[index] is not None:
+            draw_hand_skeleton(frame_bgr, self.hand_landmarks_px[index] * scale)
+
+    def _draw_status(self, frame_bgr: np.ndarray, index: int) -> None:
+        """Status panel, a red banner when the hand is lost, and the timeline strip, in place."""
+        height, width = frame_bgr.shape[:2]
+        aperture = self.aperture_m[index]
+        if np.isnan(aperture):
+            pinch = ("pinch: no hand", False)
+        else:
+            state = (
+                "closed"
+                if aperture < self.close_threshold_m
+                else "open"
+                if aperture > self.open_threshold_m
+                else "between"
+            )
+            pinch = (f"pinch {100 * aperture:.1f} cm ({state})", True)
+        rows = [
+            (f"board: {self.board_corners[index]} corners", bool(self.board_found[index])),
+            ("bowl pad marker", self.spec.bowl_marker_id in self.marker_ids[index]),
+            ("plate marker", self.spec.plate_marker_id in self.marker_ids[index]),
+            ("hand", bool(self.hand_found[index])),
+            pinch,
+        ]
+        for line, (text, found) in enumerate(rows):
+            y = 26 + 24 * line
+            cv2.circle(frame_bgr, (16, y - 6), 7, (0, 200, 0) if found else (0, 0, 255), -1, cv2.LINE_AA)
+            draw_outlined_text(frame_bgr, text, (32, y), 0.55)
+        draw_outlined_text(frame_bgr, f"t = {self.times_s[index]:.2f} s", (width - 130, 26), 0.55)
+        if not self.hand_found[index]:
+            cv2.rectangle(frame_bgr, (0, 0), (width - 1, height - 1), (0, 0, 255), 6)
+            draw_outlined_text(frame_bgr, "HAND LOST", (width // 2 - 80, 60), 0.9, (0, 0, 255))
+        lanes = [
+            self.hand_found,
+            self.marker_found(self.spec.plate_marker_id),
+            self.marker_found(self.spec.bowl_marker_id),
+            self.board_found,
+        ]
+        lane_h, top = 8, height - 8 - 8 * len(lanes)
+        columns = np.minimum(np.arange(width) * len(self.times_s) // width, len(self.times_s) - 1)
+        for lane, found in enumerate(lanes):
+            strip = np.where(found[columns, None], np.array([0, 160, 0]), np.array([0, 0, 200]))
+            frame_bgr[top + lane * lane_h : top + (lane + 1) * lane_h] = strip.astype(np.uint8)[None]
+        cursor = index * width // len(self.times_s)
+        cv2.line(frame_bgr, (cursor, top - 4), (cursor, height - 1), (255, 255, 255), 2)
+
+
+def diagnose_capture(
+    video_path: Path,
+    intrinsics: CameraIntrinsics,
+    setup: RealSetup,
+    spec: RecordingSpec | None = None,
+    segmenter: GraspSegmenter | None = None,
+) -> CaptureDiagnosis:
+    """Run the capture check and also keep every frame's detections, to see why it failed.
+
+    Args:
+        video_path: test clip.
+        intrinsics: calibration of the phone at the clip's resolution.
+        setup: measured real setup.
+        spec: markers; defaults to `RecordingSpec()`.
+        segmenter: pinch thresholds; defaults to 3 cm close, 5 cm open (what the extraction uses).
+
+    Returns:
+        The per-frame record plus the `check_capture` report.
+    """
+    from hurobo.hand import HandTcpTracker
+
+    spec = spec or RecordingSpec()
+    segmenter = segmenter or GraspSegmenter()
+    estimator = spec.estimator(intrinsics, setup)
+    board = cv2.aruco.CharucoDetector(setup.board.make_board())
+    times, corners_count, ids, corners = [], [], [], []
+    landmarks, aperture, reprojection, depth = [], [], [], []
+    with HandTcpTracker(intrinsics) as tracker:
+        for frame, t_s in read_frames_with_timestamps(video_path):
+            times.append(t_s)
+            _, charuco_ids, _, _ = board.detectBoard(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+            corners_count.append(0 if charuco_ids is None else len(charuco_ids))
+            estimator.estimate(frame)
+            detection = estimator.last_detection
+            ids.append(list(detection.ids) if detection else [])
+            corners.append(list(detection.corners) if detection else [])
+            hand = tracker.process_frame(frame, int(round(t_s * 1000)))
+            landmarks.append(None if hand is None else hand.landmarks_image_px)
+            aperture.append(np.nan if hand is None else hand.pinch_aperture_m)
+            reprojection.append(np.nan if hand is None else hand.reprojection_error_px)
+            depth.append(np.nan if hand is None else float(hand.tcp_pos_cam[2]))
+    return CaptureDiagnosis(
+        video=video_path,
+        report=check_capture(video_path, intrinsics, setup, spec),
+        times_s=np.asarray(times),
+        board_corners=np.asarray(corners_count),
+        marker_ids=ids,
+        marker_corners=corners,
+        hand_landmarks_px=landmarks,
+        aperture_m=np.asarray(aperture),
+        reprojection_px=np.asarray(reprojection),
+        tcp_depth_m=np.asarray(depth),
+        spec=spec,
+        close_threshold_m=segmenter.close_threshold_m,
+        open_threshold_m=segmenter.open_threshold_m,
+        min_board_corners=estimator.MIN_CORNERS,
+    )
+
+
+def session_commands(
+    out_dir: Path = Path("data/raw/e1"),
+    work_dir: Path = Path("data/e1"),
+    setup_path: Path = Path("data/raw/setup_01/measurements.yaml"),
+    intrinsics_path: Path = Path("data/camera_intrinsics_s24.npz"),
+    clips: int = 20,
+    generated: int = 200,
+) -> list[tuple[str, str]]:
+    """The shell commands of the E1 recording session, in order, as (what it does, command).
+
+    One definition, used by the guide, the notebook and the scripts' own help.
+
+    Args:
+        out_dir: where the raw clips and the plan live.
+        work_dir: where extracted demos, replays and the generated dataset go.
+        setup_path: the measurements file.
+        intrinsics_path: the phone's intrinsics at the recording resolution.
+        clips: number of clips to plan.
+        generated: robot demos to generate.
+    """
+    demos = work_dir / "demos"
+    generated_dir = work_dir / "generated"
+    return [
+        (
+            "1. plan: phone pose, layouts and hand starts, plus the pad and plate marker to print",
+            f"uv run python scripts/16_plan_recording.py --setup {setup_path} "
+            f"--intrinsics {intrinsics_path} --clips {clips} --out {out_dir}",
+        ),
+        (
+            "2. check a 10 s test clip before recording the session",
+            f"uv run python scripts/17_check_capture.py {out_dir}/test.mp4 --setup {setup_path} "
+            f"--intrinsics {intrinsics_path}",
+        ),
+        (
+            "3. after recording: human clips to table-frame demos + QC report",
+            f"uv run python scripts/02_extract_demos.py {out_dir}/clip_*.mp4 --setup {setup_path} "
+            f"--intrinsics {intrinsics_path} --out {demos}",
+        ),
+        (
+            "4. optional: the human dataset in LeRobot format (what you recorded, for the record)",
+            f"uv run python scripts/11_export_human_dataset.py {demos} "
+            f"--intrinsics {intrinsics_path} --out {work_dir}/human",
+        ),
+        (
+            "5. replay every demo on the robot, from the home pose, in the scaled scene (videos)",
+            f"MUJOCO_GL=egl uv run python scripts/03_replay.py {demos} --setup {setup_path} "
+            f"--out {work_dir}/replay",
+        ),
+        (
+            "6. generate the robot dataset (successful rollouts on new layouts)",
+            f"MUJOCO_GL=egl uv run python scripts/04_generate_dataset.py {demos} --setup {setup_path} "
+            f"--count {generated} --out {generated_dir}",
+        ),
+    ]
+
+
+def render_board_screen(setup: RealSetup, ppi: float, screen_px: tuple[int, int]) -> np.ndarray:
+    """The ChArUco board for a tablet: white screen, board at true size in the middle.
+
+    Show it 1:1 (one image pixel per screen pixel). The squares are rounded to whole pixels, so measure one
+    square on the glass afterwards and put the measured value in `measurements.yaml`.
+
+    Args:
+        setup: board squares, their size and marker size.
+        ppi: pixels per inch of the tablet's display.
+        screen_px: (width, height) of the display in pixels.
+
+    Returns:
+        shape (height, width) uint8 grayscale image.
+
+    Raises:
+        ValueError: if the board does not fit on the screen.
+    """
+    board = setup.board
+    square_px = round(board.square_length_m * ppi / 0.0254)
+    size = (board.squares_x * square_px, board.squares_y * square_px)
+    width_px, height_px = screen_px
+    if size[0] > width_px or size[1] > height_px:
+        raise ValueError(f"board needs {size[0]}x{size[1]} px but the screen is {width_px}x{height_px}")
+    # The board's own marker/square ratio must be kept, so render it from the board definition.
+    image = board.make_board().generateImage(size, marginSize=0)
+    sheet = np.full((height_px, width_px), 255, np.uint8)
+    top, left = (height_px - size[1]) // 2, (width_px - size[0]) // 2
+    sheet[top : top + size[1], left : left + size[0]] = image
+    return sheet

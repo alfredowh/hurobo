@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import qmc
 
 from hurobo.camera import CameraIntrinsics
+from hurobo.demo import HumanDemo
 from hurobo.real_setup import RealSetup
 from hurobo.scaled_native import LayoutSampler, SimLayout, Workspace, table_to_world_map
+from hurobo.utils.synthetic import synthetic_pick_place_demo
 
 #: How far the hand reaches above the tabletop while moving the bowl.
 HAND_ENVELOPE_HEIGHT_M = 0.30
@@ -402,3 +405,72 @@ class CapturePlanner:
 
     def _world_to_table_xy(self, xy_world: np.ndarray) -> np.ndarray:
         return self._mapping.point_to_table(np.array([xy_world[0], xy_world[1], 0.9]))[:2]
+
+
+def plan_rows(clips: list[PlannedClip], setup: RealSetup) -> list[dict[str, float | str]]:
+    """The plan as table rows: distances are in centimetres from the table's left edge and from your edge.
+
+    Args:
+        clips: from `CapturePlanner.plan`.
+        setup: measured table and objects.
+    """
+    rows: list[dict[str, float | str]] = []
+    for clip in clips:
+        bowl_left, bowl_near = clip.from_table_edges_m(clip.bowl_xy_table, setup)
+        plate_left, plate_near = clip.from_table_edges_m(clip.plate_xy_table, setup)
+        rows.append(
+            {
+                "clip": f"clip_{clip.index:03d}",
+                "bowl: cm from left edge": round(100 * bowl_left),
+                "bowl: cm from your edge": round(100 * bowl_near),
+                "plate: cm from left edge": round(100 * plate_left),
+                "plate: cm from your edge": round(100 * plate_near),
+                "hand starts": clip.hand_start.name,
+                "pinch rim on your": clip.grasp_side,
+            }
+        )
+    return rows
+
+
+def stand_in_demos(clips: list[PlannedClip], planner: CapturePlanner) -> list[HumanDemo]:
+    """Made-up human demos that follow the plan exactly (stand-ins until real clips exist).
+
+    Args:
+        clips: from `CapturePlanner.plan`.
+        planner: gives the table-frame position of each hand start.
+    """
+    return [
+        synthetic_pick_place_demo(
+            clip.bowl_xy_table,
+            clip.plate_xy_table,
+            planner.hand_start_table(clip.hand_start),
+            grasp_angle_rad=np.pi if clip.grasp_side == "left" else 0.0,
+            seed=clip.index,
+        )
+        for clip in clips
+    ]
+
+
+def write_stand_in_demos(
+    out_dir: Path, count: int, workspace: Workspace, setup: RealSetup, seed: int = 0
+) -> list[Path]:
+    """Plan `count` clips and save the matching made-up demos as `clip_NNN.npz` (stand-ins for recordings).
+
+    Args:
+        out_dir: folder to write into; created.
+        count: number of demos.
+        workspace: where the planned object layouts may lie.
+        setup: the real measurements.
+        seed: for the plan.
+
+    Returns:
+        The written paths.
+    """
+    planner = CapturePlanner(setup, workspace, seed=seed)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    clips = planner.plan(count)
+    paths = []
+    for clip, demo in zip(clips, stand_in_demos(clips, planner), strict=True):
+        paths.append(out_dir / f"clip_{clip.index:03d}.npz")
+        demo.save(paths[-1])
+    return paths

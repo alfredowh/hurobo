@@ -142,3 +142,42 @@ def scale_body_xml(root: ET.Element, body_name: str, factor: float) -> None:
 def resting_origin_height(base_offset_m: float, surface_z_m: float, clearance_m: float = 0.001) -> float:
     """World z for a body origin so that the object's lowest point sits just above a surface."""
     return surface_z_m - base_offset_m + clearance_m
+
+
+def body_footprint_xy(
+    model: mujoco.MjModel, data: mujoco.MjData, body_name: str
+) -> tuple[float, float, float, float]:
+    """World-frame (x_min, x_max, y_min, y_max) of everything that collides in a body's tree.
+
+    Uses each geom's own bounding box, so it is a conservative rectangle for any geom type.
+
+    Args:
+        model: compiled model.
+        data: its data with kinematics up to date.
+        body_name: root of the subtree, e.g. "wooden_cabinet_1_main".
+
+    Raises:
+        ValueError: if the body does not exist or has no colliding geom.
+    """
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id < 0:
+        raise ValueError(f"no body named {body_name!r}")
+    points = []
+    for geom_id in range(model.ngeom):
+        if model.body_rootid[model.geom_bodyid[geom_id]] != body_id:
+            continue
+        if model.geom_contype[geom_id] == 0 and model.geom_conaffinity[geom_id] == 0:
+            continue
+        centre, half = model.geom_aabb[geom_id, :3], model.geom_aabb[geom_id, 3:]
+        corners = _BOX_SIGNS * half + centre
+        rotation = np.asarray(data.geom_xmat[geom_id]).reshape(3, 3)
+        points.append(corners @ rotation.T + data.geom_xpos[geom_id])
+    if not points:
+        raise ValueError(f"{body_name!r} has no colliding geoms")
+    cloud = np.concatenate(points)
+    return (
+        float(cloud[:, 0].min()),
+        float(cloud[:, 0].max()),
+        float(cloud[:, 1].min()),
+        float(cloud[:, 1].max()),
+    )

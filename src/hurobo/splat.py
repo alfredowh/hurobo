@@ -243,6 +243,27 @@ def splat_centre_and_radius(xyz: np.ndarray, opacity: np.ndarray) -> tuple[np.nd
     return centre, float(np.linalg.norm(hi - centre))
 
 
+def splat_dimensions(ply_path: Path) -> tuple[float, float]:
+    """Footprint diameter and height of a splat's solid part, in the splat's own units.
+
+    Uses the same 2-98 percentile box of opaque Gaussians as `fit_gaussians_to_body`, so the number is
+    what `MATCH_BODY_XY` would rescale.
+
+    Args:
+        ply_path: object splat, z-up, base at z = 0.
+
+    Returns:
+        (mean of the x and y extents, z extent). For a scan these are SfM units, not metres, unless the
+        scan was made with a ChArUco board.
+    """
+    from gaussian_renderer import load_ply
+
+    gaussians = load_ply(str(ply_path))
+    solid = gaussians.xyz[gaussians.opacity > 0.3]
+    extent = np.percentile(solid, 98, axis=0) - np.percentile(solid, 2, axis=0)
+    return float(extent[:2].mean()), float(extent[2])
+
+
 @torch.no_grad()
 def render_splat_orbit(
     ply_path: Path,
