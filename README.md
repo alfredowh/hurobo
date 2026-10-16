@@ -16,6 +16,10 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 *Real clip `test_03`, cut to one grasp cycle and read back from the LeRobot dataset (`episode_0`). Top left: marker outlines (plate id 22, bowl pad id 21, ChArUco board), hand skeleton, projected TCP path (red: carried, blue: path so far) and the gripper symbol. Top right: the TCP path in the table frame. Bottom: pinch aperture with its open and close thresholds, state and action signals. Notebook [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb).*
 
+![Recorded dataset (left, slowed) next to the LIBERO robot replay (right, paced)](assets/dataset_replay_synchronised.gif)
+
+*The same clip, side by side: the recorded dataset (left, slowed) and the robot replay of that hand path in the scaled LIBERO scene (right, paced to match). Both sides are time-stretched for viewing. The replay did not complete the task (it timed out, see current state). Same notebook.*
+
 
 ---
 
