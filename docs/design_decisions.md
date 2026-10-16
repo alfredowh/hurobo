@@ -360,13 +360,13 @@ The first three came from a scratch loop that is not in the repo (it called the 
 | `lerobot/smolvla_libero` | 10/10 (Wilson 0.72-1.00) | 0/10 (0.00-0.28) | 0/10 (0.00-0.28) |
 | `HuggingFaceVLA/smolvla_libero` | 8/10 (0.49-0.94) | 0/10 | 0/10 |
 
-Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for both checkpoints. `lerobot/smolvla_libero` with replan 50, `scaled`: 0/5. The bowl was lifted in 2/10 `clean` and `scaled` episodes (lerobot) and 0/10 (HuggingFaceVLA); the end effector stays about 15 cm from the bowl.
+Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for both checkpoints. Two later conditions keep LIBERO's own bowl/plate placement and change only the clutter and size (notebook 09, section 2b): `clean_stock_layout` 6/10 (`lerobot`) and 3/10 (`HuggingFaceVLA`), `scaled_stock_layout` 0/10 and 0/8. So a familiar layout restores part of the success; real-size objects do not. `lerobot/smolvla_libero` with replan 50, `scaled`: 0/5. The bowl was lifted in 2/10 `clean` and `scaled` episodes (lerobot) and 0/10 (HuggingFaceVLA); the end effector stays about 15 cm from the bowl.
 **Cause.** Not established. `clean` already fails at LIBERO's own object sizes, so the real-size scaling is not the (only) cause. Untested candidates: our layouts lie outside the fixed start positions the checkpoints saw, and the removed distractors.
 **Upstream defaults.** `lerobot-eval` on the stock scene.
 **Change.** Own loop that applies the same processing as `lerobot-eval` (checked indirectly: stock success matches expectation), stops at first success, and resets the scene itself. `lerobot/smolvla_libero` needs `image -> camera1`, `image2 -> camera2`.
 **Evidence.** `scripts/18_benchmark_policy.py --checkpoints lerobot hfvla --conditions stock clean scaled --replan 10 --episodes 10`; notebook 09; saved results and one video per experiment in `eval/pretrained_libero_checkpoints/`. Checkpoints chosen by Hub likes (20 and 7), queried 2026-10-16. Open loop (100 frames of the stand-in dataset): gripper sign accuracy 0.56 and 0.44, and position error above the do-nothing baseline on dx, dy, dz; the demos are retargeted stand-in paths, not LIBERO human demos.
 **Status and limits.** `smolvla_base` cannot run LIBERO zero-shot (6-D state/action). Training: only a 20-step smoke run on 30 stand-in episodes (checkpoint 0/1 in `scaled`, as expected). Those episodes run 270-350 steps against LIBERO's 300-step limit. The `stock` result for HuggingFaceVLA depends on its n_action_steps being overridden to 10.
-**README:** not added: pretrained-only numbers on stand-in data, cause unknown.
+**README:** added to section 9 as a table with the 10-episode caveat and "cause not established". It is a measurement of the public checkpoints, not of our method.
 
 ### D-012 · 2026-10-16 · Cleaning step before extraction: one hand, one grasp cycle, a cut per clip
 

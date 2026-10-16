@@ -52,6 +52,13 @@ class RetargetConfig:
         max_total_steps: abort the whole rollout after this many steps.
         lost_bowl_distance_m: the bowl is counted as dropped when it is farther than this from the TCP
             while it should be in the fingers.
+        paced: follow the demo's own clock. The approach and the carry are tracked by a goal that moves
+            along the path as the demo's timestamps say (a demo slowed with `HumanDemo.time_scaled` gives a
+            slower robot), instead of passing goals as fast as the controller allows. There is no separate
+            straight-up lift: the carry starts right after the grasp and rises with the path.
+        control_hz: control rate, to turn steps into demo seconds when `paced`.
+        carry_rise_samples: when `paced`, the minimum carry height above the plate rim is reached
+            gradually over this many demo samples (20 per second), so the bowl does not jump up.
     """
 
     approach_radius_m: float = 0.20
@@ -69,6 +76,9 @@ class RetargetConfig:
     max_steps_per_goal: int = 150
     max_total_steps: int = 800
     lost_bowl_distance_m: float = 0.20
+    paced: bool = False
+    control_hz: float = 20.0
+    carry_rise_samples: int = 20
 
 
 @dataclass
@@ -83,6 +93,8 @@ class RetargetPlan:
             finger-closing axis radially at the rim.
         grasp_radius_m: horizontal TCP-to-bowl-centre distance at the grasp, after snapping to the rim.
         release_z_m: world z of the bowl's base centre at the release.
+        approach_times_s: shape (K,), demo time of each approach point (from the demo's timestamps).
+        bowl_path_times_s: shape (M,), demo time of each bowl-path point.
     """
 
     approach_world: np.ndarray
@@ -90,6 +102,8 @@ class RetargetPlan:
     gripper_yaw_rad: float
     grasp_radius_m: float
     release_z_m: float
+    approach_times_s: np.ndarray
+    bowl_path_times_s: np.ndarray
 
 
 @dataclass
@@ -127,15 +141,6 @@ class RolloutResult:
     phases: list[str] = field(default_factory=list)
     phase_start_steps: dict[str, int] = field(default_factory=dict)
 
-    def event_times_s(self, fps: float) -> list[float]:
-        """Times [start, approach, grasp, release, end] of the rollout, for lining it up with a human clip.
-
-        "approach" is where the transit from the home pose ends. A rollout that stopped before an event
-        (a failure) has that event at the end.
-        """
-        events = [self.phase_start_steps.get(name, self.steps) for name in ("approach", "grasp", "release")]
-        return [0.0, *(step / fps for step in events), self.steps / fps]
-
 
 def resample_path(path: np.ndarray, spacing_m: float) -> np.ndarray:
     """Points along a polyline at roughly equal arc-length spacing; both end points are kept.
@@ -157,6 +162,31 @@ def resample_path(path: np.ndarray, spacing_m: float) -> np.ndarray:
     count = max(2, int(np.ceil(arclength[-1] / spacing_m)) + 1)
     samples = np.linspace(0.0, arclength[-1], count)
     return np.stack([np.interp(samples, arclength, path[:, axis]) for axis in range(3)], axis=1)
+
+
+def resample_timed_path(
+    path: np.ndarray, times_s: np.ndarray, spacing_m: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """`resample_path`, also giving the time at which each resampled point was reached.
+
+    Args:
+        path: shape (N, 3).
+        times_s: shape (N,), non-decreasing time of each path point.
+        spacing_m: target spacing, > 0.
+
+    Returns:
+        (points, times): shapes (M, 3) and (M,). While the path stands still the time passes between two
+        neighbouring points, so a goal that follows the times waits there.
+    """
+    path = np.asarray(path, dtype=float)
+    points = resample_path(path, spacing_m)
+    arclength = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))])
+    resampled_arclength = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))])
+    # A tiny ramp keeps the arc length strictly increasing where the path stands still.
+    times = np.interp(resampled_arclength, arclength + 1e-9 * np.arange(len(arclength)), times_s)
+    # The resampled path is a little shorter than the original, which would drop a dwell at its end.
+    times[-1] = times_s[-1]
+    return points, times
 
 
 def wrap_symmetric_yaw(angle_rad: float) -> float:
@@ -254,7 +284,11 @@ class ObjectCentricRetargeter:
         from_base = approach_xy - np.asarray(ROBOT_BASE_XY)
         distance = np.linalg.norm(from_base, axis=1, keepdims=True)
         approach_xy = np.asarray(ROBOT_BASE_XY) + from_base * np.minimum(1.0, cfg.max_tcp_reach_m / distance)
-        approach = resample_path(np.column_stack([approach_xy, SIM_TABLE_TOP_Z + approach_z]), cfg.spacing_m)
+        approach, approach_times = resample_timed_path(
+            np.column_stack([approach_xy, SIM_TABLE_TOP_Z + approach_z]),
+            np.asarray(demo.timestamps_s)[start_idx : grasp_idx + 1],
+            cfg.spacing_m,
+        )
 
         # 2. carry: the bowl's base path (TCP minus the grasp offset), bent to start and end where it must
         grasp_offset_table = tcp[grasp_idx, :2] - bowl_xy_table
@@ -272,8 +306,15 @@ class ObjectCentricRetargeter:
         # Keep the base above the plate rim until it is nearly over the plate centre.
         over_plate = np.linalg.norm(carry_xy - layout.plate_xy, axis=1) < 0.05
         floor_z = self._plate_height_m + cfg.carry_clearance_m
+        if cfg.paced:
+            # No jump at the grasp: the floor is reached gradually.
+            floor_z = floor_z * np.clip(np.arange(len(carry_z)) / max(cfg.carry_rise_samples, 1), 0.0, 1.0)
         carry_z = np.where(over_plate, carry_z, np.maximum(carry_z, floor_z))
-        carry = resample_path(np.column_stack([carry_xy, SIM_TABLE_TOP_Z + carry_z]), cfg.spacing_m)
+        carry, carry_times = resample_timed_path(
+            np.column_stack([carry_xy, SIM_TABLE_TOP_Z + carry_z]),
+            np.asarray(demo.timestamps_s)[grasp_idx : release_idx + 1],
+            cfg.spacing_m,
+        )
 
         # 3. finger axis across the rim wall
         yaw = wrap_symmetric_yaw(float(np.arctan2(radial_dir[1], radial_dir[0])) - FINGER_AXIS_ANGLE_RAD)
@@ -283,6 +324,8 @@ class ObjectCentricRetargeter:
             gripper_yaw_rad=yaw,
             grasp_radius_m=self._bowl_radius_m,
             release_z_m=SIM_TABLE_TOP_Z + release_z,
+            approach_times_s=approach_times,
+            bowl_path_times_s=carry_times,
         )
 
     def _to_world_xy(
@@ -347,34 +390,85 @@ class PlanExecutor:
             pass
 
     def _script(self, plan: RetargetPlan) -> Iterator[RolloutStep]:
-        """The phases: transit (home to the approach), approach, grasp, lift, carry, release, retreat."""
+        """The phases: transit (home to the approach), approach, grasp, lift, carry, release, retreat.
+
+        When the config is `paced` the approach and the carry follow the demo's clock and there is no lift.
+        """
         cfg = self._config
         above_start = plan.approach_world[0].copy()
         above_start[2] = SIM_TABLE_TOP_Z + cfg.transit_height_m
-        goals = [above_start, *plan.approach_world]
-        for index, goal in enumerate(goals):
-            last = index == len(goals) - 1
-            tolerance = cfg.final_tolerance_m if last else cfg.pass_tolerance_m
-            phase = "transit" if index == 0 else "approach"
-            yield from self._reach(lambda goal=goal: goal, False, phase, tolerance)
+        if cfg.paced:
+            yield from self._reach(lambda: above_start, False, "transit", cfg.pass_tolerance_m)
+            yield from self._follow_timed(
+                plan.approach_world, plan.approach_times_s, lambda: np.zeros(3), False, "approach"
+            )
+        else:
+            goals = [above_start, *plan.approach_world]
+            for index, goal in enumerate(goals):
+                last = index == len(goals) - 1
+                tolerance = cfg.final_tolerance_m if last else cfg.pass_tolerance_m
+                phase = "transit" if index == 0 else "approach"
+                yield from self._reach(lambda goal=goal: goal, False, phase, tolerance)
         yield from self._hold_gripper(True, "grasp")
-        lift_to = self._eef_pos() + np.array([0.0, 0.0, 0.6 * cfg.transit_height_m])
-        yield from self._reach(lambda: lift_to, True, "lift", 0.01)
-        if self._bowl_height_m() < self.MIN_LIFT_M:
-            self._abort("bowl not lifted")
+        if not cfg.paced:
+            lift_to = self._eef_pos() + np.array([0.0, 0.0, 0.6 * cfg.transit_height_m])
+            yield from self._reach(lambda: lift_to, True, "lift", 0.01)
+            if self._bowl_height_m() < self.MIN_LIFT_M:
+                self._abort("bowl not lifted")
 
         # TCP target = planned bowl base position + the offset the bowl actually has in the fingers,
         # measured every step because the bowl swings in the grip.
-        carry_goals = plan.bowl_path_world[1:]
-        for index, goal in enumerate(carry_goals):
-            tolerance = cfg.final_tolerance_m if index == len(carry_goals) - 1 else cfg.pass_tolerance_m
-            yield from self._reach(lambda goal=goal: goal + self._tcp_minus_bowl(), True, "carry", tolerance)
-            if np.linalg.norm(self._tcp_minus_bowl()) > cfg.lost_bowl_distance_m:
-                self._abort("bowl dropped")
+        if cfg.paced:
+            yield from self._follow_timed(
+                plan.bowl_path_world, plan.bowl_path_times_s, self._tcp_minus_bowl, True, "carry"
+            )
+        else:
+            carry_goals = plan.bowl_path_world[1:]
+            for index, goal in enumerate(carry_goals):
+                last = index == len(carry_goals) - 1
+                tolerance = cfg.final_tolerance_m if last else cfg.pass_tolerance_m
+                yield from self._reach(
+                    lambda goal=goal: goal + self._tcp_minus_bowl(), True, "carry", tolerance
+                )
+                if np.linalg.norm(self._tcp_minus_bowl()) > cfg.lost_bowl_distance_m:
+                    self._abort("bowl dropped")
         yield from self._hold_gripper(False, "release", steps=2 * cfg.gripper_steps)
         retreat_to = self._eef_pos() + np.array([0.0, 0.0, cfg.retreat_height_m])
         yield from self._reach(lambda: retreat_to, False, "retreat", 0.02)
         self._abort("plan finished without success")
+
+    def _follow_timed(
+        self, path: np.ndarray, times_s: np.ndarray, offset_fn, closed: bool, phase: str
+    ) -> Iterator[RolloutStep]:
+        """Track a goal that moves along `path` as `times_s` says, then settle on its end.
+
+        Args:
+            path: shape (K, 3), world positions the TCP (plus `offset_fn()`) should pass.
+            times_s: shape (K,), demo time of each point; the goal starts at the first and takes the demo's
+                duration to reach the last.
+            offset_fn: added to the goal every step (the bowl's offset from the TCP when carrying).
+            closed: gripper state.
+            phase: name recorded for each step.
+
+        After the duration has passed, the arm gets `max_steps_per_goal` more steps to get within
+        `final_tolerance_m` of the end; a bowl lost while carrying aborts the rollout.
+        """
+        cfg = self._config
+        duration_s = float(times_s[-1] - times_s[0])
+        first_step = self._result.steps
+        for _ in range(int(np.ceil(duration_s * cfg.control_hz)) + cfg.max_steps_per_goal):
+            elapsed_s = (self._result.steps - first_step) / cfg.control_hz
+            goal = np.array([np.interp(times_s[0] + elapsed_s, times_s, path[:, axis]) for axis in range(3)])
+            pos, rot = self._scene.task.get_eef_pose(self._obs)
+            target = goal + offset_fn()
+            if elapsed_s >= duration_s and np.linalg.norm(target - pos) < cfg.final_tolerance_m:
+                return
+            action = self._follower.action_toward(
+                Waypoint(target, self._rot_goal, closed), pos, rot, cfg.action_limit
+            )
+            yield from self._send(action, phase)
+            if phase == "carry" and np.linalg.norm(self._tcp_minus_bowl()) > cfg.lost_bowl_distance_m:
+                self._abort("bowl dropped")
 
     def _abort(self, reason: str) -> None:
         self._result.failure = reason

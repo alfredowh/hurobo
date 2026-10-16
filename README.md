@@ -6,6 +6,16 @@ The robot is not teleoperated. The simulated table is a copy of the real table. 
 
 The first experiment, how to record for it and what the pipeline does with the clips: [docs/experiment_scaled_native.md](docs/experiment_scaled_native.md).
 
+**Question.** Can human videos improve a small VLA on a new layout and a new object?
+
+**Main concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
+
+**Current state.** The perception, twin, retargeting and generation code is built and tested on stand-in hand paths. One real clip is processed (below); its robot replay timed out. The 15 to 20 clip session is not recorded, and no policy is trained on my data yet. What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
+
+![A recorded human demo: markers, hand skeleton, TCP path and gripper signal](assets/human_demo_recording.jpg)
+
+*Real clip `test_03`, cut to one grasp cycle: marker outlines (plate id 22, bowl pad id 21, ChArUco board), hand skeleton, projected TCP path (red: carried, blue: path so far) and the gripper symbol from the pinch aperture. Notebook [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb).*
+
 
 ---
 
@@ -149,7 +159,9 @@ Reproduce: [01_splats_and_scans](examples/01_splats_and_scans.ipynb), part 3 (ne
 | Collision geometry | **open3d** and **CoACD** | They convert a splat to a surface mesh and convex pieces. Scanned objects then have a solid body. |
 | Tooling | **uv**, **ruff**, **pytest**, Jupyter and **plotly** | Reproducible environment, formatting and lint, tests, interactive 3D views. |
 
-Related work: MimicGen (used as a concept), HaWoR (considered and not used, because the camera is fixed), Video2Sim2Real, Phantom, PolaRiS and RoboGSim (real2sim ideas).
+Related work (full citations in [section 10](#10-references)): MimicGen [4] (used as a concept), HaWoR [5] (considered and not used, because the camera is fixed), NovaFlow [6], Video2Sim2Real [7], Phantom [8], PolaRiS [9] and RoboGSim [10] (human-video and real2sim ideas, not used as code).
+
+NovaFlow [6] is the closest in spirit and differs in the source of the motion. It turns a video made by a generative model into 3D object flow and executes that flow on a robot without any training. This project uses a real video of a human hand, retargets the hand path to many simulated object poses, and trains SmolVLA on the verified runs. I do not reuse NovaFlow's code or models, and I have not compared against it.
 
 ---
 
@@ -279,7 +291,23 @@ MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace example
 
 ## 9. Results
 
-There are no results yet. The planned experiment (target task, N = 50 episodes, Wilson 95% CI):
+### Pretrained SmolVLA checkpoints in five scenes
+
+No training by me. The two most-liked LIBERO checkpoints on the Hub drive the Panda in the simulator; success is LIBERO's own check. Same layouts for both checkpoints, 300 steps, new action chunk every 10 steps, 10 episodes per cell (one cell has 8). Source: [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) and [D-011](docs/design_decisions.md).
+
+| Scene | What changes | `lerobot/smolvla_libero` | `HuggingFaceVLA/smolvla_libero` |
+|---|---|---|---|
+| 1. Stock | LIBERO's own scene and start positions | 10/10 | 8/10 |
+| 2. Cleared, LIBERO layout | Other objects removed; bowl and plate start where LIBERO puts them | 6/10 | 3/10 |
+| 3. Cleared, new layout | Other objects removed; bowl and plate at random positions | 0/10 | 0/10 |
+| 4. Real size, LIBERO layout | Bowl and plate at the measured real sizes (plate 1.86x wider); LIBERO's placement | 0/10 | 0/8 |
+| 5. Real size, new layout | Real sizes at random positions: the target scene of my experiment | 0/10 | 0/10 |
+
+Reading: the success of both checkpoints depends strongly on where the objects start and on their size. A new layout alone takes the better checkpoint from 6/10 to 0/10, and real-size objects give 0 even on LIBERO's own layout. Removing the other objects already lowers success (scene 1 to 2). With 10 episodes per cell the 95% Wilson interval of 0/10 is 0 to 28%, so small differences mean nothing. The cause is not established: candidates not yet tested are the fixed start positions the checkpoints saw in training and the removed distractors. This is why the question above is open: a policy trained on one fixed layout does not carry over to a new layout or a new object, and whether human video fixes that is what the experiment below is for.
+
+### Planned experiment
+
+There are no results for a policy trained on my data yet. The planned experiment (target task, N = 50 episodes, Wilson 95% CI):
 
 | Policy | Trained on | Success |
 |---|---|---|
@@ -289,3 +317,39 @@ There are no results yet. The planned experiment (target task, N = 50 episodes, 
 | ACT (ours) | same data | pending |
 
 This table will contain only numbers from runs that were executed. Failed runs are included.
+
+---
+
+## 10. References
+
+Papers behind the components and related work in section 4. The status of each (as-is, configured, modified, rejected) is in the [design log](docs/design_decisions.md). Software without a paper is listed under "Software".
+
+### Related work
+
+1. M. Shukor et al. **SmolVLA: A Vision-Language-Action Model for Affordable and Efficient Robotics.** 2025. [arXiv:2506.01844](https://arxiv.org/abs/2506.01844)
+2. B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, P. Stone. **LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot Learning.** NeurIPS Datasets and Benchmarks, 2023. [arXiv:2306.03310](https://arxiv.org/abs/2306.03310)
+3. T. Z. Zhao, V. Kumar, S. Levine, C. Finn. **Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware** (ACT). RSS, 2023. [arXiv:2304.13705](https://arxiv.org/abs/2304.13705)
+4. A. Mandlekar, S. Nasiriany, B. Wen, I. Akinola, Y. Narang, L. Fan, Y. Zhu, D. Fox. **MimicGen: A Data Generation System for Scalable Robot Learning using Human Demonstrations.** CoRL, 2023. [arXiv:2310.17596](https://arxiv.org/abs/2310.17596)
+5. J. Zhang, J. Deng, C. Ma, R. A. Potamias. **HaWoR: World-Space Hand Motion Reconstruction from Egocentric Videos.** CVPR, 2025. [arXiv:2501.02973](https://arxiv.org/abs/2501.02973)
+6. H. Li, L. Sun, Y. Hu, D. Ta, J. Barry, G. Konidaris, J. Fu. **NovaFlow: Zero-Shot Manipulation via Actionable Flow from Generated Videos.** 2025. [arXiv:2510.08568](https://arxiv.org/abs/2510.08568)
+7. J. Qiu, Y. Han et al. **Video2Sim2Real: Full-Stack Autonomous Dexterous Skill Acquisition from a Single Human Video.** 2026. [arXiv:2606.08828](https://arxiv.org/abs/2606.08828)
+8. M. Lepert, J. Fang, J. Bohg. **Phantom: Training Robots Without Robots Using Only Human Videos.** CoRL, 2025. [arXiv:2503.00779](https://arxiv.org/abs/2503.00779)
+9. A. Jain, M. Zhang et al. **PolaRiS: Scalable Real-to-Sim Evaluations for Generalist Robot Policies.** 2025. [arXiv:2512.16881](https://arxiv.org/abs/2512.16881)
+10. X. Li, J. Li et al. **RoboGSim: A Real2Sim2Real Robotic Gaussian Splatting Simulator.** 2024. [arXiv:2411.11839](https://arxiv.org/abs/2411.11839)
+
+### Components
+
+11. J. Wu et al. **DISCOVERSE: Efficient Robot Simulation in Complex High-Fidelity Environments.** IROS, 2025. [arXiv:2507.21981](https://arxiv.org/abs/2507.21981)
+12. B. Kerbl, G. Kopanas, T. Leimkühler, G. Drettakis. **3D Gaussian Splatting for Real-Time Radiance Field Rendering.** ACM TOG (SIGGRAPH), 2023. [arXiv:2308.04079](https://arxiv.org/abs/2308.04079)
+13. V. Ye et al. **gsplat: An Open-Source Library for Gaussian Splatting.** 2024. [arXiv:2409.06765](https://arxiv.org/abs/2409.06765)
+14. J. L. Schönberger, J.-M. Frahm. **Structure-from-Motion Revisited** (COLMAP). CVPR, 2016. [PDF](https://openaccess.thecvf.com/content_cvpr_2016/html/Schonberger_Structure-From-Motion_Revisited_CVPR_2016_paper.html)
+15. F. Zhang et al. **MediaPipe Hands: On-device Real-time Hand Tracking.** 2020. [arXiv:2006.10214](https://arxiv.org/abs/2006.10214)
+16. X. Wei et al. **Approximate Convex Decomposition for 3D Meshes with Collision-Aware Concavity and Tree Search** (CoACD). SIGGRAPH, 2022. [arXiv:2205.02961](https://arxiv.org/abs/2205.02961)
+
+### Software
+
+- [LeRobot](https://github.com/huggingface/lerobot) (Hugging Face): training, evaluation and the LeRobotDataset v3 format.
+- [robosuite](https://robosuite.ai) and [MuJoCo](https://mujoco.org): the physics and rendering under LIBERO.
+- [OpenCV](https://opencv.org) (ArUco, ChArUco, `solvePnP`) and [Open3D](https://www.open3d.org).
+
+Author lists marked "et al." are shortened; the arXiv page of each entry has the full list. Every title and arXiv number was checked against its arXiv listing. I read the abstracts only, not the full papers, for entries 6 to 11.

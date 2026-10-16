@@ -10,6 +10,7 @@ import numpy as np
 
 from hurobo.camera import CameraIntrinsics
 from hurobo.demo import HumanDemo
+from hurobo.demo_overlay import DemoOverlay
 from hurobo.recorder import LeRobotRecorder, vector_feature, video_feature
 from hurobo.utils.dashboard_video import SignalPanel, SyncedDashboard, write_dashboard_video
 from hurobo.utils.transforms import transform_to_pos_quat_wxyz
@@ -251,6 +252,7 @@ def episode_dashboard(
     episode_index: int,
     close_threshold_m: float | None = None,
     open_threshold_m: float | None = None,
+    overlay: DemoOverlay | None = None,
 ) -> SyncedDashboard:
     """Dashboard of one recorded episode, built only from what a dataset consumer reads.
 
@@ -259,6 +261,8 @@ def episode_dashboard(
         episode_index: episode to show.
         close_threshold_m: lower edge of the grasp hysteresis band to draw, if any.
         open_threshold_m: upper edge of the grasp hysteresis band to draw, if any.
+        overlay: overlay of the demo this episode was exported from; if given, the phone image shows its
+            markers, hand, TCP with path, object centres and gripper (the curves still come from the dataset).
 
     Returns:
         Phone image | TCP path in the table frame | aperture | observation.state | action,
@@ -275,6 +279,9 @@ def episode_dashboard(
         )
         for s in samples
     ]
+    if overlay is not None:
+        for sample, frame_bgr in enumerate(frames_bgr):
+            overlay.annotate_sample(frame_bgr, sample)
     return SyncedDashboard(
         frames_bgr,
         np.array([float(s["timestamp"]) for s in samples]),
@@ -306,6 +313,7 @@ def write_episode_dashboard_video(
     video_path: Path,
     close_threshold_m: float | None = None,
     open_threshold_m: float | None = None,
+    overlay: DemoOverlay | None = None,
 ) -> Path:
     """Video of one recorded episode: image, TCP path, aperture, state and action on one clock.
 
@@ -315,11 +323,12 @@ def write_episode_dashboard_video(
         video_path: output .mp4 (H.264, browser-playable).
         close_threshold_m: lower edge of the grasp hysteresis band to draw, if any.
         open_threshold_m: upper edge of the grasp hysteresis band to draw, if any.
+        overlay: see `episode_dashboard`.
 
     Returns:
         `video_path`, played at the dataset's fps.
     """
-    dashboard = episode_dashboard(dataset, episode_index, close_threshold_m, open_threshold_m)
+    dashboard = episode_dashboard(dataset, episode_index, close_threshold_m, open_threshold_m, overlay)
     return write_dashboard_video(dashboard, video_path, dataset.fps)
 
 

@@ -173,6 +173,24 @@ class DemoGenerator:
         start, end = self._retargeter().replayed_sample_range(demo)
         return demo.slowdown_for(limit, start, end), limit
 
+    def human_hold_s(self, demo: HumanDemo, result: RolloutResult) -> float:
+        """How long the human video should wait so that its replayed part starts with the robot's approach.
+
+        The robot first travels from its home pose to the start of the approach (the "transit" phase); the
+        human motion it replays starts `replayed_sample_range(demo)[0]` samples into the demo.
+
+        Args:
+            demo: the (possibly slowed) demo that was replayed.
+            result: outcome of that replay.
+
+        Returns:
+            Seconds >= 0 (0 when the human is already late enough, e.g. because it was slowed).
+        """
+        start = self._retargeter().replayed_sample_range(demo)[0]
+        human_s = float(demo.timestamps_s[start] - demo.timestamps_s[0])
+        robot_s = result.phase_start_steps.get("approach", 0) / FPS
+        return max(0.0, robot_s - human_s)
+
     def layout_of_demo(self, demo: HumanDemo, clamp_to_workspace: bool = False) -> SimLayout:
         """The sim layout that is the human's own layout of that clip (the 'twin' of the recording).
 

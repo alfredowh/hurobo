@@ -148,3 +148,16 @@ def test_retarget_requires_grasp_and_release(setup: RealSetup) -> None:
     retargeter = ObjectCentricRetargeter(table_to_world_map(setup, Workspace()), 0.069, 0.031)
     with pytest.raises(ValueError):
         retargeter.plan(demo, SimLayout(np.array([0.0, 0.1]), np.array([0.0, -0.1])))
+
+
+def test_resample_timed_path_gives_each_point_its_time() -> None:
+    from hurobo.retarget import resample_timed_path
+
+    path = np.array([[0.0, 0, 0], [0.1, 0, 0], [0.1, 0, 0], [0.2, 0, 0]])
+    times = np.array([0.0, 1.0, 3.0, 4.0])
+    points, point_times = resample_timed_path(path, times, 0.05)
+    assert points.shape == (len(point_times), 3)
+    assert point_times[0] == 0.0 and np.isclose(point_times[-1], 4.0)
+    assert np.all(np.diff(point_times) >= 0)
+    # the standstill (1 s to 3 s) falls between the points on either side of x = 0.1
+    assert np.isclose(point_times[np.argmin(np.abs(points[:, 0] - 0.1))], 1.0, atol=1.0)

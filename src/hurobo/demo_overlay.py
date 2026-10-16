@@ -42,6 +42,7 @@ class DemoOverlay:
         """
         self._demo = demo
         self._diagnosis = diagnosis
+        self._source_width_px = intrinsics.image_width
         t_cam_table = invert_transform(np.asarray(demo.t_table_cam))
         self._tcp_px = intrinsics.project(apply_transform(t_cam_table, np.asarray(demo.tcp_pos_table)))
         self._object_px = {
@@ -59,17 +60,6 @@ class DemoOverlay:
         if grasp is None or release is None or sample < grasp:
             return "approach"
         return "carry" if sample < release else "retreat"
-
-    def event_times_s(self) -> list[float]:
-        """Times [start, approach, grasp, release, end] of the written overlay video (its own clock, from 0).
-
-        The human is already at the start of the approach when the video begins, so those two are both 0.
-        """
-        times = np.asarray(self._demo.timestamps_s) - self._demo.timestamps_s[0]
-        grasp, release = self._demo.grasp_frame_idx, self._demo.release_frame_idx
-        if grasp is None or release is None:
-            raise ValueError("the demo needs a detected grasp and release")
-        return [0.0, 0.0, float(times[grasp]), float(times[release]), float(times[-1])]
 
     def draw(self, frame_bgr: np.ndarray, frame_index: int, sample: int, scale: float) -> None:
         """Annotate one video frame in place.
@@ -107,12 +97,36 @@ class DemoOverlay:
         )
         draw_outlined_text(frame_bgr, f"phase: {self.phase_at(sample)}", (width - 190, 26), 0.7)
 
-    def write_video(self, out_path: Path, width_px: int = 960) -> Path:
-        """Video of the demo's kept stretch with the overlay.
+    def annotate_sample(self, frame_bgr: np.ndarray, sample: int) -> None:
+        """Annotate, in place, the image stored for one demo sample (e.g. a frame of the exported dataset).
+
+        Args:
+            frame_bgr: the sample's image at any resolution of the clip's aspect ratio.
+            sample: demo sample the image belongs to.
+        """
+        # The stored image is the clip frame nearest to the sample's time, so detections come from that frame.
+        t_s = self._demo.source_start_time_s + self._demo.timestamps_s[sample]
+        frame_index = int(np.argmin(np.abs(self._diagnosis.times_s - t_s)))
+        self.draw(frame_bgr, frame_index, sample, frame_bgr.shape[1] / self._source_width_px)
+
+    def write_video(
+        self,
+        out_path: Path,
+        width_px: int = 960,
+        slowdown: float = 1.0,
+        hold_start_s: float = 0.0,
+        fps: float | None = None,
+    ) -> Path:
+        """Video of the demo's kept stretch with the overlay, optionally slowed and held at the start.
 
         Args:
             out_path: output .mp4; the parent folder is created.
             width_px: output width; the height keeps the aspect ratio.
+            slowdown: how many times slower than recorded to play (1 = real time); every source frame is
+                shown for `slowdown` times as long, so no frames are invented.
+            hold_start_s: seconds the first frame is held before the motion starts (the human waits for
+                the robot).
+            fps: output rate; the clip's own by default, 20 when slowed.
 
         Returns:
             `out_path`.
@@ -121,7 +135,10 @@ class DemoOverlay:
         start = self._demo.source_start_time_s
         stop = start + float(self._demo.timestamps_s[-1])
         video = self._demo.source_video
+        out_fps = fps or (get_video_fps(video) if slowdown == 1.0 else 20.0)
         writer = None
+        written = 0
+        previous = None
         try:
             for index, (frame, t_s) in enumerate(read_frames_with_timestamps(video)):
                 if not start <= t_s <= stop:
@@ -132,8 +149,18 @@ class DemoOverlay:
                 )
                 self.draw(frame, index, self.sample_at(t_s), scale)
                 if writer is None:
-                    writer = VideoWriter(out_path, get_video_fps(video), (frame.shape[1], frame.shape[0]))
-                writer.write(frame)
+                    writer = VideoWriter(out_path, out_fps, (frame.shape[1], frame.shape[0]))
+                else:
+                    # the previous frame stays until this one's turn comes
+                    due = round((hold_start_s + (t_s - start) * slowdown) * out_fps)
+                    for _ in range(due - written):
+                        writer.write(previous)
+                    written = max(written, due)
+                previous = frame
+            if writer is not None:
+                due = round((hold_start_s + (stop - start) * slowdown) * out_fps)
+                for _ in range(due - written):
+                    writer.write(previous)
         finally:
             if writer is not None:
                 writer.close()

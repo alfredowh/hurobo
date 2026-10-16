@@ -69,67 +69,51 @@ def test_gripper_gauge_spreads_the_fingers_with_the_aperture() -> None:
     assert np.ptp(finger_columns(wide, (0, 200, 0))) > np.ptp(finger_columns(narrow, (0, 0, 230)))
 
 
-def test_rollout_result_event_times_end_at_the_last_step_when_there_was_no_release() -> None:
-    from hurobo.retarget import RolloutResult
-
-    result = RolloutResult(steps=100, phase_start_steps={"approach": 30, "grasp": 40})
-    assert result.event_times_s(20.0) == [0.0, 1.5, 2.0, 5.0, 5.0]
-
-
-def test_phase_aligned_video_plays_on_in_real_time_after_the_last_event(tmp_path: Path) -> None:
-    from hurobo.utils.video import VideoWriter, read_frames, write_phase_aligned_video
-
-    def clip(name: str, seconds: float) -> Path:
-        path = tmp_path / name
-        with VideoWriter(path, 10.0, (64, 48)) as writer:
-            for _ in range(int(seconds * 10)):
-                writer.write(np.zeros((48, 64, 3), np.uint8))
-        return path
-
-    out = write_phase_aligned_video(
-        clip("a.mp4", 2.0),
-        clip("b.mp4", 4.0),
-        tmp_path / "out.mp4",
-        ("a", "b"),
-        left_events_s=[0.0, 1.0],
-        right_events_s=[0.0, 2.0],
-        fps=10.0,
-        play_on_after_last_event=True,
-    )
-    # 2 s aligned segment (the right clip needs it) + 1.9 s tail (the right clip's remaining time)
-    assert sum(1 for _ in read_frames(out)) == 39
-
-
-def test_pause_faster_waits_instead_of_slowing_and_the_slowdown_stretches_the_slow_side(
-    tmp_path: Path,
-) -> None:
-    from hurobo.utils.video import VideoWriter, read_frames, write_phase_aligned_video
-
-    def clip(name: str, seconds: float) -> Path:
-        path = tmp_path / name
-        with VideoWriter(path, 10.0, (64, 48)) as writer:
-            for _ in range(int(seconds * 10)):
-                writer.write(np.zeros((48, 64, 3), np.uint8))
-        return path
-
-    # left waits 1 s (equal events), then 1 s of its video slowed x2 takes 2 s; right needs 1 s then 1 s
-    out = write_phase_aligned_video(
-        clip("a.mp4", 2.0),
-        clip("b.mp4", 2.0),
-        tmp_path / "out.mp4",
-        ("a", "b"),
-        left_events_s=[0.0, 0.0, 1.0],
-        right_events_s=[0.0, 1.0, 2.0],
-        fps=10.0,
-        slowdowns=(2.0, 1.0),
-        pause_faster=True,
-    )
-    assert sum(1 for _ in read_frames(out)) == 30
-
-
 def test_slowdown_for_scales_a_demo_to_a_speed_limit() -> None:
     demo = _demo()
     demo.tcp_pos_table = np.column_stack([np.arange(10) * 0.05, np.zeros(10), np.zeros(10)])  # 1 m/s
     assert demo.slowdown_for(0.25) == 4.0
     assert demo.slowdown_for(5.0) == 1.0
     assert demo.time_scaled(4.0).timestamps_s[-1] == 4.0 * demo.timestamps_s[-1]
+
+
+def test_annotate_sample_draws_on_a_downscaled_frame_with_the_matching_clip_frame() -> None:
+    from types import SimpleNamespace
+
+    drawn: list[tuple[int, float]] = []
+    diagnosis = SimpleNamespace(
+        times_s=2.0 + np.arange(20) * 0.025,
+        draw_detections=lambda _frame, index, scale: drawn.append((index, scale)),
+    )
+    overlay = _overlay()
+    overlay._diagnosis = diagnosis  # type: ignore[assignment]
+    frame = np.zeros((240, 320, 3), np.uint8)
+
+    overlay.annotate_sample(frame, 4)  # sample 4 is at 2.0 + 0.2 s of the clip = clip frame 8
+
+    assert drawn == [(8, 0.5)]
+    assert frame.any()
+
+
+def test_overlay_video_is_slowed_and_held_by_repeating_frames(tmp_path: Path) -> None:
+    from hurobo.camera import CameraIntrinsics
+    from hurobo.demo import HumanDemo
+    from hurobo.utils.video import VideoWriter, read_frames
+
+    source = tmp_path / "clip.mp4"
+    with VideoWriter(source, 10.0, (64, 48)) as writer:
+        for _ in range(20):
+            writer.write(np.zeros((48, 64, 3), np.uint8))
+    demo = _demo()
+    demo = HumanDemo(**{**vars(demo), "source_video": source, "source_start_time_s": 0.0})
+    demo.timestamps_s = np.arange(10) * 0.1
+    intrinsics = CameraIntrinsics(np.array([[500.0, 0, 32], [0, 500.0, 24], [0, 0, 1]]), np.zeros(5), 64, 48)
+
+    class _NoDetections:
+        def draw_detections(self, *_args: object) -> None:
+            return None
+
+    overlay = DemoOverlay(demo, _NoDetections(), intrinsics)  # type: ignore[arg-type]
+    out = overlay.write_video(tmp_path / "out.mp4", width_px=64, slowdown=2.0, hold_start_s=1.0, fps=10.0)
+    # 1 s held + 0.9 s of motion x2 = 2.8 s at 10 fps
+    assert sum(1 for _ in read_frames(out)) == 28

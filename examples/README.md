@@ -37,7 +37,8 @@ MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace example
 ## Conventions for new notebooks
 
 - Name `NN_topic.ipynb`, numbered in order; add a row to the table above.
-- First cell: `from hurobo.utils.notebook import setup_notebook` then `ROOT = setup_notebook()` (repo root, headless GL).
+- First cell: `%load_ext autoreload` + `%autoreload 2`, so edits to `src/hurobo` reload without a kernel restart.
+- Second cell: `from hurobo.utils.notebook import setup_notebook` then `ROOT = setup_notebook()` (repo root, headless GL).
 - Import from `src/hurobo`; never define a function or class in a notebook and never copy code between notebooks. Anything a cell needs beyond a few lines of glue goes into a shared module in the same change:
   - interactive plotly views: `hurobo.utils.viewer` (return a `go.Figure`, call `.show()` in the notebook);
   - static matplotlib figures: `hurobo.utils.plotting` (return a `Figure`);
