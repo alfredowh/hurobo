@@ -35,7 +35,11 @@ happened **after** that: defaults that did not work on our data, and what we did
 | Metric table scan (ChArUco on a tablet, tabletop box crop, object finder) | OpenCV ArUco board detection; own alignment (`ChArUcoAligner`) | **Novel** | D-009. |
 | Splat rendering / compositing | DISCOVERSE `gaussian-renderer` | As-is | `load_ply` and rasterisation; compositing code is ours. |
 | Collision geometry | open3d, CoACD | As-is | |
-| Retargeting | MimicGen idea (concept only) | Novel (own code) | MimicGen is cited, not installed. |
+| SmolVLA checkpoints for LIBERO | `lerobot/smolvla_libero`, `HuggingFaceVLA/smolvla_libero` | As-is | D-011. Weights unchanged; our own closed-loop evaluation, since `lerobot-eval` rebuilds the stock scene. |
+| SmolVLA fine-tuning | `lerobot-train` from `lerobot/smolvla_base` | Configured | D-011. Camera rename and expert-only training; 20-step smoke run only. |
+| Retargeting | MimicGen idea (concept only) | Novel (own code) | MimicGen is cited, not installed. D-010. |
+| LIBERO scene for E1 (scaled bowl and plate, other objects parked) | `libero_goal` task 8 | **Modified** | D-010. Our own env loop is needed; `lerobot-eval` rebuilds the stock scene. |
+| Table frame from a ChArUco board for human clips | OpenCV ArUco/ChArUco | Novel (own code, `BoardMarkerPoseEstimator`) | Same frame as the table scans (D-009). D-010. |
 
 ---
 
@@ -304,6 +308,62 @@ Two related findings from the same clips, recorded so they are not re-tried:
 **Status and limits.** Opt-in, not wired into `scripts/09_scan_object.py` or `ScanSweep`. Two clips of one plate, no held-out photometric score. The rim and profile are the prior, not a measurement. Splat units, as before (`MATCH_BODY_XY`).
 **Alternatives reviewed, not run (subagent, 2026-10-14; sizes from the Hugging Face API, VRAM and runtimes mostly unverified):** Depth Anything V2 Large 1.34 GB (CC-BY-NC, pip, fits 16 GB) as a depth loss in `SplatTrainer`; Depth Pro 1.9 GB; PGSR / 2DGS planar regularisation (compile risk, port as a loss); TRELLIS 3.3 GB and SAM 3D Objects 13.2 GB are risky on 16 GB and cu126; PoinTr has a Python 3.7-era extension stack and the wrong domain. Rejected for now, not evaluated on our data.
 **README:** not added: two clips, visual judgement only, opt-in.
+
+
+### D-010 · 2026-10-14 · E1 Scaled-Native: real-size bowl and plate in LIBERO, retargeted from the home pose
+
+**Component:** `hurobo.object_scale`, `scaled_native`, `retarget`, `generate`, `reach`, `capture_plan`, `recording`, `markers.BoardMarkerPoseEstimator`, `extract` (plane anchor). **Status:** Modified (LIBERO scene) and Novel (retargeting, board-frame recording). Validated on **made-up** hand paths only; no real clip has been processed.
+
+Full guide: [experiment_scaled_native.md](experiment_scaled_native.md). Decisions, in the order they were forced on us:
+
+1. **Uniform scale per object, to the measured diameter.** Bowl x1.227 (LIBERO 11.2 cm to 13.8 cm), plate x1.855 (13.8 cm to 25.5 cm). Heights follow LIBERO's proportions: bowl -4 %, plate +10 % against the measurements (the bowl height in `measurements.yaml` is a `TODO`). Anisotropic scaling was not done: the collision boxes sit at arbitrary rotations in the body frame.
+2. **The other five libero_goal objects are parked** (8 m away, collisions off). With the plate at real size, 0.00 % of random bowl/plate pairs in the work area avoid them, 38 % when the table is cleared (`layout_feasible_fraction`, notebook 10, section 2; 0.06 % against 29 % in an earlier, wider work area). The scene is therefore not fully "native". `keep_distractors=True` restores them.
+3. **Layouts are ours, not LIBERO's init states.** Its 2 cm ranges put the small plate where the large one now overlaps the bowl.
+4. **The work area is 0.26 m deep and 0.50 m wide**, not the whole table. A reach map (`hurobo.reach`, home orientation, fingertips 0.94 and 1.05 m up) gives position errors under 0.5 cm for |y| <= 0.2 up to x = 0.10, 2.3 cm at (x = 0.10, |y| = 0.3) and 4.5 to 15 cm farther out at the higher height. A first, wider work area made an approach from the far side time out (arm stuck at 0.76 m from the base). The approach is also pulled back inside 0.76 m of the base.
+5. **Grasp height is fixed to 4 cm above the table** in the robot demo; the human height is replaced. With the human value (clipped to 3 to 6 cm) 2 of 10 rollouts closed on the very top of the 2 mm wall and did not lift the bowl; with 4 cm none of the next 30 did.
+6. **The carry path is for the bowl, not the fingers.** Held by one rim point the bowl swings like a pendulum, 3 to 4 cm off the fingers' position. Driving the fingers along the human path left the bowl 3.3 cm from the plate centre, 3 mm outside LIBERO's 3 cm check. The executor measures the offset every step and moves the fingers so that the bowl follows the bent path.
+7. **The depth anchor can use a plane.** The pad marker lies on the table beside the bowl, so it says nothing about the depth of a rim grasp. `ExtractionConfig.grasp_height_m` intersects the camera ray through the grasp with the plane at that height (bowl height minus 1.2 cm). Test: `test_height_anchor_recovers_depth_without_a_marker_at_the_grasp`. Default (marker anchor) unchanged.
+8. **Success terminates the episode and LIBERO resets itself** to the stock scene. A step after a success silently runs on the stock, small objects. The executor stops at the first success; the evaluation loop must too. For the same reason `lerobot-eval` cannot be used on this scene as it is.
+
+**Evidence** (repo code; `scripts/04_generate_dataset.py` on four made-up demos with distinct hand starts, new random layouts; steps are control steps at 20 Hz):
+
+| Run | Config | Rollouts | Succeeded | Failure modes |
+|---|---|---|---|---|
+| scratch, seed 3 | grasp height snapped, loose tolerances | 30 | 25 | 3 timeouts, 2 placed 3.5 cm off |
+| scratch, seed 7 | + pass tolerance 2 cm, release at 4 mm, wait after release, x clamp | 30 | 29 | 1 approach timeout at the reach limit |
+| scratch, seed 11 | + radial reach clamp, narrower work area | 40 | 40 | none |
+| repo script, seed 5 | final config, four made-up demos | 40 | 39 | 1 timeout |
+
+The first three came from a scratch loop that is not in the repo (it called the same classes); only the last row is reproducible from `scripts/04_generate_dataset.py`. The two final-config runs (40/40 and 39/40, different seeds and demo sets) put the success rate at about 98 %; the one timeout was not diagnosed. Each fix was made after looking at the failures of the previous run, and the final config was only run on seeds it was not tuned on. Typical episode: 240 to 300 steps (12 to 15 s). One of three generated episodes in an early run took 710 steps.
+
+**Status and limits.**
+- The pipeline defaults are the config above. The notebook runs 8 rollouts and 4 twin replays as a smoke test.
+- The "human" is a minimum-jerk path with 2 mm noise: no occlusion, no depth error, no hand-size scatter. The success rate is that of retargeting plus execution given a clean demo, an upper bound for real clips.
+- The plate is 10 % taller than the real one and 1.86x wider; its collision boxes extend about 1 cm past the visual rim (LIBERO's own approximation).
+- Reach errors were measured with one orientation (home), at two heights, from a single run.
+- Real-clip behaviour of `BoardMarkerPoseEstimator` is tested only on rendered boards (pose error < 3 mm, < 1 degree).
+- The phone-pose search uses 1080p intrinsics and a geometric visibility model; nothing was filmed from the poses it proposes.
+
+**README:** added to the status table and the notebook list as "built and tested on stand-in data". Not added: any success rate, because it is an upper bound from made-up input.
+
+### D-011 · 2026-10-16 · Pretrained SmolVLA LIBERO checkpoints in the cleared and scaled scenes
+
+**Component:** `hurobo.policy_rollout`, `benchmark`, `training`, scripts 18 and 19. **Status:** As-is weights, our own evaluation loop; training wrapper Configured.
+
+**Symptom.** Both most-liked SmolVLA LIBERO checkpoints solve the stock task but 0 of 10 episodes in the cleared scene, with and without real-size objects.
+
+| Checkpoint | stock | clean (LIBERO sizes) | scaled (real sizes) |
+|---|---|---|---|
+| `lerobot/smolvla_libero` | 10/10 (Wilson 0.72-1.00) | 0/10 (0.00-0.28) | 0/10 (0.00-0.28) |
+| `HuggingFaceVLA/smolvla_libero` | 8/10 (0.49-0.94) | 0/10 | 0/10 |
+
+Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for both checkpoints. `lerobot/smolvla_libero` with replan 50, `scaled`: 0/5. The bowl was lifted in 2/10 `clean` and `scaled` episodes (lerobot) and 0/10 (HuggingFaceVLA); the end effector stays about 15 cm from the bowl.
+**Cause.** Not established. `clean` already fails at LIBERO's own object sizes, so the real-size scaling is not the (only) cause. Untested candidates: our layouts lie outside the fixed start positions the checkpoints saw, and the removed distractors.
+**Upstream defaults.** `lerobot-eval` on the stock scene.
+**Change.** Own loop that applies the same processing as `lerobot-eval` (checked indirectly: stock success matches expectation), stops at first success, and resets the scene itself. `lerobot/smolvla_libero` needs `image -> camera1`, `image2 -> camera2`.
+**Evidence.** `scripts/18_benchmark_policy.py --checkpoints lerobot hfvla --conditions stock clean scaled --replan 10 --episodes 10`; notebook 11; saved results and one video per experiment in `eval/pretrained_libero_checkpoints/`. Checkpoints chosen by Hub likes (20 and 7), queried 2026-10-16. Open loop (100 frames of the stand-in dataset): gripper sign accuracy 0.56 and 0.44, and position error above the do-nothing baseline on dx, dy, dz; the demos are retargeted stand-in paths, not LIBERO human demos.
+**Status and limits.** `smolvla_base` cannot run LIBERO zero-shot (6-D state/action). Training: only a 20-step smoke run on 30 stand-in episodes (checkpoint 0/1 in `scaled`, as expected). Those episodes run 270-350 steps against LIBERO's 300-step limit. The `stock` result for HuggingFaceVLA depends on its n_action_steps being overridden to 10.
+**README:** not added: pretrained-only numbers on stand-in data, cause unknown.
 
 ---
 

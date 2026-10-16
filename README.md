@@ -4,6 +4,8 @@ This project trains a small robot foundation model (SmolVLA, 450M parameters) wi
 
 The robot is not teleoperated. The simulated table is a copy of the real table. The Panda repeats what the human hand did on it.
 
+The first experiment, how to record for it and what the pipeline does with the clips: [docs/experiment_scaled_native.md](docs/experiment_scaled_native.md).
+
 The challenge brief is in [CHALLENGE.md](CHALLENGE.md). The schedule and gates are in [PLAN.md](PLAN.md). The real2sim research notes are in [REAL2SIM_IDEAS.md](REAL2SIM_IDEAS.md).
 
 ---
@@ -184,6 +186,9 @@ hurobo/
 │   ├── control.py                    # waypoints → clipped 7-D delta actions
 │   ├── teleop.py, teleop_app.py, live.py, props.py   # hand/keyboard teleop of the Panda, live window, grasp cube
 │   ├── scan.py, scan_sweep.py, splat.py, collider.py # orbit video → splat → composite → collision mesh; scan parameter sweep
+│   ├── real_setup.py, object_scale.py, scaled_native.py # measurements.yaml, MJCF scaling, E1 scene (scaled bowl and plate)
+│   ├── capture_plan.py, recording.py # phone pose search, layouts, markers, capture check
+│   ├── retarget.py, generate.py, reach.py # human demo → robot demo from home, dataset generation, reach map
 │   └── utils/                        # transforms, signal, video, plotting, viewer, synthetic, notebook
 ├── scripts/                          # thin CLIs: NN_name.py
 ├── examples/                         # one notebook for each capability (section 8)
@@ -207,10 +212,10 @@ Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started
 | Area | Item | Status |
 |---|---|---|
 | Setup | uv environment, cu126 torch, LIBERO renders a frame | ✅ |
-| Objects | Read the bounding boxes of the LIBERO bowl and plate assets | ⬜ |
+| Objects | Read the bounding boxes of the LIBERO bowl and plate assets | ✅ (bowl 11.2 cm, plate 13.8 cm; scaled x1.23 and x1.86 to the measured objects, D-010) |
 | Objects | Find real objects with the same size. Attach ArUco markers. | ⬜ |
 | Capture | Phone calibration (intrinsics files for S24 and S10e exist) | 🟡 |
-| Capture | **15 real third-person demo clips** with markers (only stand-in clips so far) | ⬜ |
+| Capture | **15 to 20 real third-person demo clips**, ChArUco board as the table frame, bowl pad and plate marker. Plan, markers and capture check exist ([guide](docs/experiment_scaled_native.md)) | 🟡 tooling ✅, recording ⬜ |
 | Capture | Slow orbit of table, bowl and plate with ChArUco board (for scanning) | ⬜ |
 | Perception | ArUco poses, MediaPipe + PnP hand TCP, grasp segmentation, QC report | ✅ |
 | Perception | Run on real clips. Check the depth anchor correction. | ⬜ |
@@ -218,11 +223,11 @@ Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started
 | Sim | `SceneTwin`: real layout and camera in the simulator | ✅ (real clip needed) |
 | Sim | Real and sim-twin side-by-side replay (`03_replay.py`, empty now) | ⬜ |
 | Teleop | Hand-clip and keyboard teleop of the Panda, live window | ✅ |
-| Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation | ⬜ |
+| Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation, robot from the home pose | ✅ on made-up hand paths ([D-010](docs/design_decisions.md)); no real clip yet |
 | Retargeting | Tune grasp height and offset once. Measure success on 20 rollouts. | ⬜ |
-| Generation | `DemoGenerator` and `04_generate_dataset.py` (multiprocess, success only) | ⬜ |
+| Generation | `DemoGenerator` and `04_generate_dataset.py` (success only, one process) | ✅ on made-up hand paths; multiprocess not done |
 | Training | `05_train.sh`. ACT fallback (about 1 h), then SmolVLA fine-tune. | ⬜ |
-| Evaluation | `06_eval.sh`. N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. | ⬜ |
+| Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | ⬜ |
 | Figures | GIFs, 3D trajectory plot (human TCP and robot EEF), data-multiplier curve, one failure case | ⬜ |
 | Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. Real bowl scans work with a lowered SIFT threshold and an automatic floor-based crop, checked on one object in one scene ([D-001, D-004](docs/design_decisions.md)). No table or plate scan, no ChArUco metric scan, no composite yet. |
 | Stretch | Second camera view for stereo, only if monocular depth fails | ⬜ |
@@ -246,6 +251,7 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 | [05_hand_tracking](examples/05_hand_tracking.ipynb) | MediaPipe + PnP hand TCP, pinch-aperture step-through, ArUco poses against ground truth, `DemoExtractor` QC report. |
 | [06_lerobot_recording](examples/06_lerobot_recording.ipynb) | `HumanDemo` → LeRobotDataset v3 export and reload: schema, video, state and action, sidecar file. |
 | [07_teleop](examples/07_teleop.ipynb) | Hand-clip teleoperation of the LIBERO Panda: table-to-world mapping, tracking error, cube spawned on grasp, scripted keyboard control. |
+| [10_scaled_native_experiment](examples/10_scaled_native_experiment.ipynb) | Experiment E1: real-size bowl and plate in LIBERO, the recording plan (phone pose, layouts, markers, commands), human demo to robot demo from the home pose, success rate of retargeted rollouts. Hand input is made up. |
 | [08_scan_parameter_sweep](examples/08_scan_parameter_sweep.ipynb) | How SfM settings, matching mode, keyframe spacing and training length change a real phone scan (registration, orbit coverage, held-out PSNR), and three ways of cropping the object compared against an independent reference. Real clip, not committed. |
 
 Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebook 08 is the exception and reads results from a real phone clip of a bowl. Each notebook states this in its introduction.
