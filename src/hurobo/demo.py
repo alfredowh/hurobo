@@ -111,6 +111,16 @@ class GraspSegmenter:
         self._close_threshold_m = close_threshold_m
         self._open_threshold_m = open_threshold_m
 
+    @property
+    def close_threshold_m(self) -> float:
+        """Aperture below which the hand counts as grasping."""
+        return self._close_threshold_m
+
+    @property
+    def open_threshold_m(self) -> float:
+        """Aperture above which the hand counts as released."""
+        return self._open_threshold_m
+
     def segment(self, pinch_aperture_m: np.ndarray) -> np.ndarray:
         """Compute a boolean is-grasping signal from a pinch-aperture time series.
 

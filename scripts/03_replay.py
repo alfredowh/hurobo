@@ -16,13 +16,10 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
-
 from hurobo.demo import HumanDemo
 from hurobo.generate import DemoGenerator
 from hurobo.real_setup import DEFAULT_MEASUREMENTS, RealSetup
 from hurobo.scaled_native import ScaledNativeScene
-from hurobo.utils.video import VideoWriter, caption_frame
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,13 +56,8 @@ def main() -> None:
             print(f"[SKIP] {path.stem}: its layout is outside the reachable work area")
             results.append({"clip": path.stem, "skipped": "layout outside the work area"})
             continue
-        steps, executor = generator.rollout(demo, layout)
         video = args.out / f"{path.stem}.mp4"
-        with VideoWriter(video, 20.0, (args.size, args.size)) as writer:
-            for step in steps:
-                image = scene.task.render_camera("agentview", args.size, args.size)
-                writer.write(caption_frame(np.ascontiguousarray(image), step.phase))
-        result = executor.result
+        result, _ = generator.rollout_with_video(demo, video, layout, args.size)
         outcome = "SUCCESS" if result.success else f"FAILED ({result.failure})"
         print(f"{path.stem}: {outcome}, {result.steps} steps -> {video}")
         results.append(

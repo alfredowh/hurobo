@@ -9,11 +9,18 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from hurobo.object_scale import ObjectExtent, measure_body_extent, resting_origin_height, scale_body_xml
+from hurobo.object_scale import (
+    ObjectExtent,
+    body_footprint_xy,
+    measure_body_extent,
+    resting_origin_height,
+    scale_body_xml,
+)
 from hurobo.real_setup import RealSetup
 from hurobo.sim import LiberoTask, ObjectPose
 from hurobo.teleop import TableToWorld
 from hurobo.twin import SIM_TABLE_TOP_Z
+from hurobo.utils.transforms import cv_camera_pose_to_mujoco, transform_to_pos_quat_wxyz
 
 SUITE_NAME = "libero_goal"
 TASK_ID = 8  # "put the bowl on the plate"
@@ -35,6 +42,9 @@ _DISTRACTOR_JOINTS = {
 }
 _PARKING_XY = np.array([0.0, 8.0])
 
+#: World (x, y) of the Panda's base (read from the sim).
+ROBOT_BASE_XY = (-0.66, 0.0)
+
 #: The robot's base is at world x = -0.66; this table-to-world yaw puts the person's reach direction
 #: (table +y, away from the person) along the robot's reach direction (world +x).
 YAW_WORLD_TABLE_RAD = -np.pi / 2.0
@@ -55,6 +65,31 @@ class ObjectScales:
     plate: float
     native_bowl: ObjectExtent
     native_plate: ObjectExtent
+
+    def comparison(self, setup: RealSetup) -> list[dict[str, float | str]]:
+        """Rows (object, real, LIBERO stock, scaled, factor), in centimetres, for a table.
+
+        Args:
+            setup: the measured objects.
+        """
+        rows: list[dict[str, float | str]] = []
+        for name, real, native, factor in (
+            ("bowl", setup.bowl, self.native_bowl, self.bowl),
+            ("plate", setup.plate, self.native_plate, self.plate),
+        ):
+            rows.append(
+                {
+                    "object": name,
+                    "real diameter": 100 * real.diameter_m,
+                    "LIBERO diameter": 100 * native.diameter_m,
+                    "scale factor": factor,
+                    "sim diameter": 100 * factor * native.diameter_m,
+                    "real height": 100 * real.height_m,
+                    "LIBERO height": 100 * native.height_m,
+                    "sim height": 100 * factor * native.height_m,
+                }
+            )
+        return rows
 
     def height_error(self, real_bowl_height_m: float, real_plate_height_m: float) -> dict[str, float]:
         """Relative height error of each scaled object against the real one (positive = sim taller).
@@ -86,11 +121,12 @@ class Workspace:
 
     Attributes:
         x_range: (min, max) world x. The upper end is limited by the Panda's reach from its base at x = -0.66.
-        y_range: (min, max) world y.
+        y_range: (min, max) world y. Narrower than the table: at |y| = 0.3 the arm no longer reaches x = 0.1
+            with the fingers upright (position error 2 cm at table height, see `hurobo.reach`).
     """
 
-    x_range: tuple[float, float] = (-0.18, 0.10)
-    y_range: tuple[float, float] = (-0.30, 0.30)
+    x_range: tuple[float, float] = (-0.18, 0.08)
+    y_range: tuple[float, float] = (-0.25, 0.25)
 
     @property
     def centre(self) -> np.ndarray:
@@ -178,8 +214,8 @@ class ScaledNativeScene:
     - **Bowl and plate are uniformly scaled** so their diameters equal the measured ones (the visual mesh,
       the collision boxes and the mass follow). The real plate is 1.86x LIBERO's.
     - **The five other objects are parked off the table** (no collision, 8 m away). With the real-size plate
-      almost no layout fits between them (0.06 % of random bowl/plate pairs in the reachable area, 29 % when
-      cleared; `scripts/..`, notebook 10). Pass `keep_distractors=True` to leave them where LIBERO puts them.
+      almost no layout fits between them (0.00 % of random bowl/plate pairs in the work area, 38 % when
+      cleared; notebook 10). Pass `keep_distractors=True` to leave them where LIBERO puts them.
     - **The initial layout is ours** (`SimLayout`), not LIBERO's init state: its 2 cm ranges were made for
       the small plate, which now overlaps the bowl there.
 
@@ -242,11 +278,13 @@ class ScaledNativeScene:
         """The layout sampler (for generating many layouts)."""
         return self._sampler
 
-    def reset(self, layout: SimLayout | None = None) -> dict:
+    def reset(self, layout: SimLayout | None = None, scaled: bool = True) -> dict:
         """Reset the episode, apply the scaling and the layout, and let things settle.
 
         Args:
             layout: where to put bowl and plate; sampled if None.
+            scaled: False keeps LIBERO's own bowl and plate sizes (everything else as usual), to compare
+                against the scaled scene on the same layout.
 
         Returns:
             The LeRobot-style observation after settling (leading n_envs = 1 axis, like `LiberoTask.reset`).
@@ -256,7 +294,8 @@ class ScaledNativeScene:
         mujoco.mj_forward(model, data)
         if self._scales is None:
             self._scales = self._measure_scales(model, data)
-        self._apply_scaling()
+        if scaled:
+            self._apply_scaling()
         mujoco.mj_forward(self._task.mj_model, self._task.mj_data)
         self._base_offsets = {
             body: measure_body_extent(
@@ -279,6 +318,34 @@ class ScaledNativeScene:
             self._task.set_object_pose(joint, ObjectPose(np.array([xy[0], xy[1], z]), Rotation.identity()))
         self._task.mj_data.qvel[:] = 0.0
         self._task.sim.forward()
+
+    def render_top_down(self, size: int = 480) -> np.ndarray:
+        """Render the table from straight above (the robot at the top of the image), for size comparisons.
+
+        Moves the twin camera; the policy cameras are untouched.
+
+        Args:
+            size: image side in pixels.
+        """
+        height_above_table_m = 1.0
+        centre = np.array([*self.workspace.centre, SIM_TABLE_TOP_Z])
+        # OpenCV axes: image right = world +y, image down = world +x, optical axis = world -z.
+        t_world_cam_cv = np.eye(4)
+        t_world_cam_cv[:3, :3] = np.column_stack([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+        t_world_cam_cv[:3, 3] = centre + np.array([0.0, 0.0, height_above_table_m])
+        pos, quat_wxyz = transform_to_pos_quat_wxyz(cv_camera_pose_to_mujoco(t_world_cam_cv))
+        self._task.set_camera_pose(self._task.TWIN_CAMERA_NAME, pos, quat_wxyz, 50.0)
+        return self._task.render_camera(self._task.TWIN_CAMERA_NAME, size, size)
+
+    def distractor_footprints(self) -> dict[str, tuple[float, float, float, float]]:
+        """World (x_min, x_max, y_min, y_max) of each other object in the stock scene.
+
+        This resets the task; call `reset` again before using the scaled scene.
+        """
+        self._task.reset()
+        model, data = self._task.mj_model, self._task.mj_data
+        mujoco.mj_forward(model, data)
+        return {name: body_footprint_xy(model, data, name) for name in DISTRACTOR_BODIES}
 
     def object_xy(self) -> SimLayout:
         """Current world (x, y) of the bowl and plate centres."""
@@ -332,3 +399,94 @@ class ScaledNativeScene:
         for _ in range(self.SETTLE_STEPS):
             obs, _success, _terminated = self._task.step(hold)
         return obs
+
+
+def layout_feasible_fraction(
+    workspace: Workspace,
+    bowl_radius_m: float,
+    plate_radius_m: float,
+    footprints: dict[str, tuple[float, float, float, float]],
+    samples: int = 50000,
+    clearance_m: float = 0.015,
+    gap_m: float = 0.03,
+    seed: int = 0,
+) -> float:
+    """Share of random bowl/plate placements in the workspace that touch neither each other nor an object.
+
+    Args:
+        workspace: where object centres are drawn from, uniformly and independently.
+        bowl_radius_m: real bowl radius.
+        plate_radius_m: real plate radius.
+        footprints: rectangles to stay clear of, e.g. `ScaledNativeScene.distractor_footprints()`; empty
+            for a cleared table.
+        samples: number of random pairs.
+        clearance_m: extra distance kept from those rectangles.
+        gap_m: free space between the bowl and plate rims.
+        seed: for the generator.
+    """
+    rng = np.random.default_rng(seed)
+    low = np.array([workspace.x_range[0], workspace.y_range[0]])
+    high = np.array([workspace.x_range[1], workspace.y_range[1]])
+    bowl = rng.uniform(low, high, (samples, 2))
+    plate = rng.uniform(low, high, (samples, 2))
+    ok = np.linalg.norm(bowl - plate, axis=1) >= bowl_radius_m + plate_radius_m + gap_m
+    for x_min, x_max, y_min, y_max in footprints.values():
+        for centre, radius in ((bowl, bowl_radius_m), (plate, plate_radius_m)):
+            nearest = np.column_stack(
+                [np.clip(centre[:, 0], x_min, x_max), np.clip(centre[:, 1], y_min, y_max)]
+            )
+            ok &= np.linalg.norm(centre - nearest, axis=1) >= radius + clearance_m
+    return float(ok.mean())
+
+
+def render_unscaled_vs_scaled(
+    asset_sets: dict[str, list],
+    setup: RealSetup,
+    size: int = 320,
+    camera_names: tuple[str, ...] = ("agentview", "frontview"),
+    seed: int = 0,
+) -> dict[str, np.ndarray]:
+    """Each splat set drawn on the stock LIBERO bodies and on bodies scaled to the real measurements.
+
+    The splats are fitted with `MATCH_BODY_XY`, so a bigger body gives a bigger splat: this shows the
+    object size the policy would see before and after scaling. The scaled scene uses `ScaledNativeScene`
+    (distractors parked, our layout); the stock one uses LIBERO's own initial state, so object positions
+    differ between the two rows by design.
+
+    Args:
+        asset_sets: label -> splats (see `hurobo.splat.build_assets`).
+        setup: the real measurements.
+        size: square size of one camera image in pixels.
+        camera_names: cameras joined left to right.
+        seed: layout seed of the scaled scene.
+
+    Returns:
+        "<label> | stock" and "<label> | scaled" -> (size, size * len(camera_names), 3) uint8 composite.
+    """
+    from hurobo.splat import LIBERO_GOAL_DISTRACTOR_ROOTS, SplatCompositor, render_asset_composites
+
+    images = {
+        f"{label} | stock LIBERO size": image
+        for label, image in render_asset_composites(asset_sets, size=size, camera_names=camera_names).items()
+    }
+    scene = ScaledNativeScene(setup, seed=seed)
+    scene.reset()
+    try:
+        for label, assets in asset_sets.items():
+            compositor = SplatCompositor(
+                scene.task.mj_model,
+                assets,
+                hidden_body_roots=LIBERO_GOAL_DISTRACTOR_ROOTS,
+                width=size,
+                height=size,
+            )
+            try:
+                views = [
+                    compositor.render_layers(scene.task.mj_data, name)["composite"] for name in camera_names
+                ]
+                images[f"{label} | scaled to measurements"] = np.concatenate(views, axis=1)
+            finally:
+                compositor.close()
+    finally:
+        scene.task.close()
+    return images

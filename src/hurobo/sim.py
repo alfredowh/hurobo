@@ -107,6 +107,14 @@ class LiberoTask:
         self.task_description = self._libero_env.task_description
         return obs
 
+    def select_init_state(self, index: int) -> None:
+        """Make the next `reset` use LIBERO's init state `index` (wraps around the task's 50 states).
+
+        Args:
+            index: init state number.
+        """
+        self._libero_env.init_state_id = index
+
     def step(self, action: np.ndarray) -> tuple[dict, bool, bool]:
         """Step the env with a 7-D relative action.
 

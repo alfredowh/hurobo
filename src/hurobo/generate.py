@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,10 +16,12 @@ from hurobo.retarget import (
     ObjectCentricRetargeter,
     PlanExecutor,
     RetargetConfig,
+    RolloutResult,
     RolloutStep,
 )
 from hurobo.scaled_native import ScaledNativeScene, SimLayout, Workspace, table_to_world_map
 from hurobo.teleop import TableToWorld
+from hurobo.utils.video import VideoWriter, caption_frame
 
 STATE_NAMES = ["eef_x", "eef_y", "eef_z", "eef_aa_x", "eef_aa_y", "eef_aa_z", "gripper_q1", "gripper_q2"]
 ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz", "gripper"]
@@ -171,6 +174,29 @@ class DemoGenerator:
         plan = retargeter.plan(demo, layout)
         executor = PlanExecutor(self._scene, self._config)
         return executor.run(obs, plan), executor
+
+    def rollout_with_video(
+        self, demo: HumanDemo, video_path: Path, layout: SimLayout | None = None, size: int = 480
+    ) -> tuple[RolloutResult, np.ndarray]:
+        """Run one rollout and write an agent-view video with the phase as a caption.
+
+        Args:
+            demo: the human demo to retarget.
+            video_path: output .mp4 (20 fps).
+            layout: where the objects go; sampled if None.
+            size: video side in pixels.
+
+        Returns:
+            (result, eef_path): the outcome, and the end-effector world positions, shape (N, 3), one per step.
+        """
+        steps, executor = self.rollout(demo, layout)
+        eef_path = []
+        with VideoWriter(video_path, float(FPS), (size, size)) as writer:
+            for step in steps:
+                image = self._scene.task.render_camera("agentview", size, size)
+                writer.write(caption_frame(np.ascontiguousarray(image), step.phase))
+                eef_path.append(np.asarray(step.obs["robot_state"]["eef"]["pos"][0]))
+        return executor.result, np.asarray(eef_path)
 
     def generate(
         self, count: int, recorder: LeRobotRecorder, task: str, max_attempts: int | None = None

@@ -10,7 +10,13 @@ from scipy.spatial.transform import Rotation
 
 from hurobo.control import Waypoint, WaypointFollower
 from hurobo.demo import HumanDemo
-from hurobo.scaled_native import BOWL_JOINT, PLATE_JOINT, ScaledNativeScene, SimLayout
+from hurobo.scaled_native import (
+    BOWL_JOINT,
+    PLATE_JOINT,
+    ROBOT_BASE_XY,
+    ScaledNativeScene,
+    SimLayout,
+)
 from hurobo.teleop import TableToWorld
 from hurobo.twin import SIM_TABLE_TOP_Z
 
@@ -33,8 +39,9 @@ class RetargetConfig:
             fingertip pads can hold, and a pinch at the very top of a 2 mm wall does not lift the bowl.
         release_clearance_m: height of the bowl's base above the plate surface when it is let go.
         carry_clearance_m: height of the bowl's base above the plate rim while it travels over it.
-        max_tcp_x_m: world x beyond which the Panda (base at x = -0.66) cannot hold the fingers upright;
-            the replayed approach is clamped to it, which matters when the human came in from the far side.
+        max_tcp_reach_m: horizontal distance from the robot base beyond which the Panda cannot hold the
+            fingers upright at table height (measured: `docs/experiment_scaled_native.md`); the replayed
+            approach is pulled back inside it, which matters when the human came in from the far side.
         retreat_height_m: how far the TCP rises after the release.
         action_limit: fraction of the controller's per-step motion limit used (1 = fastest).
         gripper_steps: control steps spent waiting for the gripper to close or open.
@@ -53,7 +60,7 @@ class RetargetConfig:
     grasp_height_m: float = 0.040
     release_clearance_m: float = 0.004
     carry_clearance_m: float = 0.04
-    max_tcp_x_m: float = 0.10
+    max_tcp_reach_m: float = 0.76
     retreat_height_m: float = 0.15
     action_limit: float = 0.5
     gripper_steps: int = 14
@@ -220,7 +227,9 @@ class ObjectCentricRetargeter:
         ramp = np.linspace(0.0, 1.0, len(approach_xy))
         approach_xy = approach_xy + ramp[:, None] * (snapped_xy - approach_xy[-1])
         approach_z = approach_z + ramp * (cfg.grasp_height_m - approach_z[-1])
-        approach_xy[:, 0] = np.minimum(approach_xy[:, 0], cfg.max_tcp_x_m)
+        from_base = approach_xy - np.asarray(ROBOT_BASE_XY)
+        distance = np.linalg.norm(from_base, axis=1, keepdims=True)
+        approach_xy = np.asarray(ROBOT_BASE_XY) + from_base * np.minimum(1.0, cfg.max_tcp_reach_m / distance)
         approach = resample_path(np.column_stack([approach_xy, SIM_TABLE_TOP_Z + approach_z]), cfg.spacing_m)
 
         # 2. carry: the bowl's base path (TCP minus the grasp offset), bent to start and end where it must

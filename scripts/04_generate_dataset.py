@@ -7,7 +7,10 @@ that LIBERO's success check accepts are written.
     MUJOCO_GL=egl uv run python scripts/04_generate_dataset.py data/e1/demos --count 200 \
         --setup data/raw/setup_01/measurements.yaml --out data/e1/generated
 
-Train on it with lerobot-train (see docs/experiment_scaled_native.md).
+Without real clips, `--stand-in 20` first writes 20 made-up hand demos into `demos_dir` (a stand-in for the
+recordings; the planned layouts and hand starts are real, the hand paths are synthetic).
+
+Train on it with scripts/19_train_smolvla.py (see docs/experiment_scaled_native.md).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from hurobo.capture_plan import write_stand_in_demos
 from hurobo.demo import HumanDemo
 from hurobo.generate import FPS, DemoGenerator, sim_features
 from hurobo.real_setup import DEFAULT_MEASUREMENTS, RealSetup
@@ -34,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-id", default="local/hurobo_e1_scaled_native")
     parser.add_argument("--count", type=int, default=100, help="successful episodes to write")
     parser.add_argument("--max-attempts", type=int, default=None, help="default: 4 x count")
+    parser.add_argument("--stand-in", type=int, default=0, help="write this many made-up demos first")
     parser.add_argument("--keep-distractors", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
@@ -43,8 +48,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     setup = RealSetup.load(args.setup)
-    demos = [HumanDemo.load(path) for path in sorted(args.demos_dir.glob("*.npz"))]
     scene = ScaledNativeScene(setup, keep_distractors=args.keep_distractors, seed=args.seed)
+    if args.stand_in:
+        write_stand_in_demos(args.demos_dir, args.stand_in, scene.workspace, setup, args.seed)
+    paths = sorted(args.demos_dir.glob("*.npz"))
+    demos = [HumanDemo.load(path) for path in paths]
     generator = DemoGenerator(scene, demos, seed=args.seed)
     with LeRobotRecorder(
         args.out, args.repo_id, FPS, sim_features(), robot_type="panda", overwrite=args.overwrite
@@ -53,7 +61,7 @@ def main() -> None:
         recorder.write_sidecar(
             {
                 "experiment": "E1 scaled-native",
-                "human_demos": [d.source_video.name for d in demos],
+                "human_demos": [path.name for path in paths],
                 "attempted": stats.attempted,
                 "succeeded": stats.succeeded,
                 "failures": dict(stats.failures),
