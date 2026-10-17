@@ -26,7 +26,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 | --- | --- | --- |
 | ![Generated clip 0](assets/generated_clip_0.gif) | ![Generated clip 1](assets/generated_clip_1.gif) | ![Generated clip 2](assets/generated_clip_2.gif) |
 
-*First three generated episodes (agent-view camera, real time, subsampled from 20 to 10 fps).*
+*First three generated episodes (agent-view camera left, wrist camera right, real time, subsampled from 20 to 10 fps).*
 
 - **Each rollout:** a random bowl and plate position, and one of the 12 human demos drawn at random. There is no nearest-layout selection and no action noise; those live in `22_mimicgen_expand.py`.
 - **Trajectory:** the approach (last 20 cm of the hand path) is anchored to the bowl and the carry (the bowl's path) to the plate. Grasp height, finger yaw and release height are set by the robot, not copied from the human.
