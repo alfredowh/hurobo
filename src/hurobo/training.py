@@ -32,6 +32,11 @@ class SmolVLATrainConfig:
             fine-tuning). False also trains the language model, as `lerobot/smolvla_libero` did.
         seed: training seed.
         num_workers: dataloader workers.
+        learning_rate: peak learning rate; None keeps SmolVLA's default (1e-4).
+        warmup_steps: linear warm-up steps; None keeps SmolVLA's default (1000).
+        log_freq: log the loss every this many steps.
+        decay_steps: length of the cosine decay after warm-up; None keeps SmolVLA's default (30000), which
+            for a short run means the rate never decays, so short runs should set it to `steps`.
     """
 
     dataset_root: Path
@@ -44,10 +49,14 @@ class SmolVLATrainConfig:
     train_expert_only: bool = True
     seed: int = 1000
     num_workers: int = 4
+    learning_rate: float | None = None
+    warmup_steps: int | None = None
+    decay_steps: int | None = None
+    log_freq: int = 200
 
     def to_cli_args(self) -> list[str]:
         """Arguments for `lerobot-train`."""
-        return [
+        args = [
             f"--policy.path={self.init_from}",
             "--policy.device=cuda",
             "--policy.push_to_hub=false",
@@ -64,8 +73,16 @@ class SmolVLATrainConfig:
             f"--save_freq={self.save_freq}",
             f"--seed={self.seed}",
             f"--num_workers={self.num_workers}",
+            f"--log_freq={self.log_freq}",
             "--wandb.enable=false",
         ]
+        optional = {
+            "optimizer_lr": self.learning_rate,
+            "scheduler_warmup_steps": self.warmup_steps,
+            "scheduler_decay_steps": self.decay_steps,
+        }
+        args += [f"--policy.{name}={value}" for name, value in optional.items() if value is not None]
+        return args
 
     def command(self) -> list[str]:
         """The full command line (run through `uv run`)."""

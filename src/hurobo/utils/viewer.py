@@ -1536,3 +1536,82 @@ def open_loop_figure(
     figure.update_xaxes(title_text="step in the chunk", row=1, col=2)
     figure.update_layout(title=title, barmode="group")
     return figure
+
+
+def checkpoint_progress_figure(table: pd.DataFrame, title: str = "SmolVLA checkpoints") -> go.Figure:
+    """Closed-loop success (with Wilson interval) and open-loop errors against the training step.
+
+    Args:
+        table: from `hurobo.checkpoint_eval.checkpoint_table` (step, success_rate, ci_low, ci_high, episodes,
+            successes, mae_pos, zero_mae_pos, gripper_accuracy; any may be missing).
+        title: figure title.
+
+    Returns:
+        Two stacked panels: success rate in % with whiskers (hover shows successes/episodes), and the
+        open-loop position error with the do-nothing baseline plus the gripper sign accuracy.
+    """
+    figure = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.12,
+        subplot_titles=("Closed loop: success rate (95 % Wilson interval)", "Open loop on training frames"),
+        specs=[[{}], [{"secondary_y": True}]],
+    )  # fmt: skip
+    if "success_rate" in table:
+        closed = table.dropna(subset=["success_rate"])
+        figure.add_trace(
+            go.Scatter(
+                x=closed["step"],
+                y=100 * closed["success_rate"],
+                mode="lines+markers",
+                name="success",
+                error_y={
+                    "type": "data",
+                    "symmetric": False,
+                    "array": 100 * (closed["ci_high"] - closed["success_rate"]),
+                    "arrayminus": 100 * (closed["success_rate"] - closed["ci_low"]),
+                },
+                customdata=closed[["successes", "episodes"]],
+                hovertemplate="step %{x}: %{y:.0f} % (%{customdata[0]}/%{customdata[1]})<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if "mae_pos" in table:
+        opened = table.dropna(subset=["mae_pos"])
+        steps = opened["step"]
+        series = [
+            (100 * opened["mae_pos"], "position MAE x100", "lines+markers", None, False),
+            (100 * opened["zero_mae_pos"], "do-nothing baseline x100", "lines", {"dash": "dot"}, False),
+            (opened["gripper_accuracy"], "gripper sign accuracy", "lines+markers", None, True),
+        ]
+        for values, name, mode, line, secondary in series:
+            figure.add_trace(
+                go.Scatter(x=steps, y=values, mode=mode, name=name, line=line),
+                row=2,
+                col=1,
+                secondary_y=secondary,
+            )
+    figure.update_yaxes(title_text="success (%)", range=[0, 105], row=1, col=1)
+    figure.update_yaxes(title_text="mean |error| x100 (action units)", row=2, col=1, secondary_y=False)
+    figure.update_yaxes(title_text="gripper accuracy", range=[0, 1.05], row=2, col=1, secondary_y=True)
+    figure.update_xaxes(title_text="training step", row=2, col=1)
+    figure.update_layout(title=title, height=620, legend={"orientation": "h", "y": -0.2})
+    return figure
+
+
+def training_loss_figure(losses: pd.DataFrame, title: str = "Training loss") -> go.Figure:
+    """Training loss and learning rate per logged step.
+
+    Args:
+        losses: from `hurobo.checkpoint_eval.parse_training_log` (step, loss, lr).
+        title: figure title.
+    """
+    figure = make_subplots(specs=[[{"secondary_y": True}]])
+    figure.add_trace(go.Scatter(x=losses["step"], y=losses["loss"], name="loss (mean over log window)"))
+    figure.add_trace(
+        go.Scatter(x=losses["step"], y=losses["lr"], name="learning rate", line={"dash": "dot"}),
+        secondary_y=True,
+    )
+    figure.update_yaxes(title_text="loss", secondary_y=False)
+    figure.update_yaxes(title_text="learning rate", secondary_y=True)
+    figure.update_layout(title=title, xaxis_title="training step")
+    return figure
