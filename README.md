@@ -10,7 +10,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Main concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
 
-**Current state.** The perception, twin, retargeting and generation code is built and tested on stand-in hand paths. 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. No policy is trained on this data yet. What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
+**Current state.** The perception, twin, retargeting and generation code is built. It was first tested on made-up hand paths and has now run on real clips: 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. SmolVLA fine-tuned on it reaches 2/10 closed-loop successes at the final checkpoint (see Planned experiment). What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
 
 ![A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action](assets/episode_dashboard.gif)
 
@@ -20,7 +20,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 *The same clip, side by side: the recorded dataset (left, slowed) and the robot replay of that hand path in the scaled LIBERO scene (right, paced to match). Both sides are time-stretched for viewing. The replay did not complete the task (it timed out, see current state). Same notebook.*
 
-**Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). The 70 failures: 37 "bowl not lifted", 33 timeouts. Kept episodes take 224 to 663 control steps (median 321.5, 35 498 frames at 20 Hz); many are longer than the 300 steps `lerobot-eval` allows, and no length filter was applied to this run. Per rollout: a random bowl and plate position and one of the 12 human demos drawn at random (no nearest-layout selection, no action noise: those are in the separate `22_mimicgen_expand.py`); the approach (last 20 cm of the hand path) is anchored to the bowl, the carry (the bowl's path) to the plate; grasp height, finger yaw and release height are set by the robot, not copied from the human. Each episode has the agent-view and wrist camera. Metadata: `data/e1/generated_clips/hurobo_meta.json` (not committed). The success rate is of the generator, not of a trained policy. I have not checked which clips the 100 episodes come from per source.
+**Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). The 70 failures: 37 "bowl not lifted", 33 timeouts. Kept episodes take 224 to 663 control steps (median 321.5, 35 498 frames at 20 Hz); many are longer than the 300 steps `lerobot-eval` allows, and no length filter was applied to this run. Per rollout: a random bowl and plate position and one of the 12 human demos drawn at random (no nearest-layout selection, no action noise: those are in the separate `22_mimicgen_expand.py`); the approach (last 20 cm of the hand path) is anchored to the bowl, the carry (the bowl's path) to the plate; grasp height, finger yaw and release height are set by the robot, not copied from the human. Each episode has the agent-view and wrist camera. Metadata: `data/e1/generated_clips/hurobo_meta.json` (not committed). Generating all 170 attempts takes roughly 40 to 50 minutes in one process: a 12-attempt test of the same script took 3 min 39 s including start-up, and the file times of the real run span about 40 minutes (no wall-clock time was logged). 5 of the 12 clips are ones whose release-distance QC gate was waived. The success rate is of the generator, not of a trained policy. I have not checked which clips the 100 episodes come from per source.
 
 
 ---
@@ -34,7 +34,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 | Constraint | Effect on the design |
 |---|---|
 | One 16 GB GPU | Use a 450M-parameter VLA in bf16. |
-| The data must come from a phone | About 15 third-person clips on a tripod. One camera. No depth sensor. No motion-capture glove. |
+| The data must come from a phone | 26 third-person clips on a tripod (12 usable after cleaning). One camera. No depth sensor. No motion-capture glove. |
 
 **Limitations**
 
@@ -55,7 +55,7 @@ flowchart LR
     C --> D[SceneTwin<br/>real layout + camera in sim]
     C --> E[Object-centric retargeting<br/>MimicGen-style]
     D --> F[Real and sim-twin<br/>side-by-side replay]
-    E --> G[Hundreds of verified<br/>robot demos in LIBERO]
+    E --> G[Verified robot demos<br/>in LIBERO, 100 so far]
     G --> H[LeRobotDataset v3]
     H --> I[Fine-tune SmolVLA<br/>from smolvla_base]
     I --> J[Evaluate in LIBERO<br/>lerobot-eval]
@@ -110,7 +110,7 @@ Select ready LIBERO objects (bowl, plate). Find real objects with the same size.
 | Step | Approach | Status |
 |---|---|---|
 | Baseline | **Motion-only retargeting with size-matched objects (Solution 4).** The video is a motion-capture device. Only a few object-relative numbers cross from real to sim: approach direction, grasp height, lift, carry path, place offset, release timing. SmolVLA does not see a real pixel. | core path |
-| Main visual | **SceneTwin:** copy the real object layout and camera pose into the simulator. Replay. Render from the same viewpoint next to the real clip. | built, checked on stand-in data |
+| Main visual | **SceneTwin:** copy the real object layout and camera pose into the simulator. Replay. Render from the same viewpoint next to the real clip. | built; one real clip shown next to its replay (the replay timed out) |
 | Stretch | **Solutions 2 and 3 with Gaussian splats:** attach scanned objects (and scene) to the LIBERO bodies. Composite with the mesh robot by depth. | pipeline built, checked on stand-in scans and two real phone clips of one bowl (COLMAP's defaults registered 39 of 120 frames of one clip, so SfM uses a lowered SIFT threshold; see the [design log](docs/design_decisions.md)), time-gated |
 
 The baseline avoids the visual domain gap. It does not close the gap. Splat-based real2sim reduces the visual gap for illustration. A real-robot validation is outside this challenge.
@@ -220,6 +220,9 @@ hurobo/
 │   ├── real_setup.py, object_scale.py, scaled_native.py # measurements.yaml, MJCF scaling, E1 scene (scaled bowl and plate)
 │   ├── capture_plan.py, recording.py # phone pose search, layouts, markers, capture check
 │   ├── retarget.py, generate.py, reach.py # human demo → robot demo from home, dataset generation, reach map
+│   ├── mimicgen.py                   # MimicGen-style expansion: nearest-layout sources, action noise
+│   ├── clip_clean.py, clip_cutter_app.py # cleaning of real clips, manual clip cutter
+│   ├── training.py, checkpoint_eval.py, model_comparison.py, policy_rollout.py, benchmark.py # SmolVLA fine-tune, per-checkpoint and cross-model evaluation
 │   └── utils/                        # transforms, signal, video, plotting, viewer, synthetic, notebook
 ├── scripts/                          # thin CLIs: NN_name.py
 ├── examples/                         # one notebook for each capability (section 8)
@@ -238,28 +241,30 @@ Rules for the code:
 
 ## 7. Status and TODO
 
-Legend: ✅ built and tested on stand-in data, 🟡 partly done, ⬜ not started.
+Legend: ✅ done (the row says whether it ran on real clips or only on stand-in data), 🟡 partly done, ⬜ not started.
 
 | Area | Item | Status |
 |---|---|---|
 | Setup | uv environment, cu126 torch, LIBERO renders a frame | ✅ |
 | Objects | Read the bounding boxes of the LIBERO bowl and plate assets | ✅ (bowl 11.2 cm, plate 13.8 cm; scaled x1.23 and x1.86 to the measured objects, D-010) |
-| Objects | Find real objects with the same size. Attach ArUco markers. | ⬜ |
+| Objects | Real bowl and plate measured; ArUco pad on the bowl (id 21) and marker on the plate (id 22) | ✅ (measurements in `measurements.yaml`) |
 | Capture | Phone calibration (intrinsics files for S24 and S10e exist) | 🟡 |
-| Capture | **15 to 20 real third-person demo clips**, ChArUco board as the table frame, bowl pad and plate marker. Plan, markers and capture check exist ([guide](docs/experiment_scaled_native.md)) | 🟡 tooling ✅, recording ⬜ |
+| Capture | **Real third-person demo clips**, ChArUco board as the table frame, bowl pad and plate marker. Plan, markers and capture check exist ([guide](docs/experiment_scaled_native.md)) | ✅ 26 clips recorded, 12 usable after cleaning |
 | Capture | Slow orbit of table, bowl and plate with ChArUco board (for scanning) | ⬜ |
 | Perception | ArUco poses, MediaPipe + PnP hand TCP, grasp segmentation, QC report | ✅ |
-| Perception | Run on real clips. Check the depth anchor correction. | ⬜ |
+| Perception | Clip cleaning (`20_clean_clips.py`, notebook 10): per-frame filters, cut to one open-closed-open cycle, clip filters | ✅ on real clips: 12 of 26 usable; 5 of the 12 pass only with the release-distance gate waived |
+| Perception | Extraction on real clips. Check the depth anchor correction and the printed marker size | 🟡 runs; the marker size is not measured, so object poses may be scaled wrongly (see the open issues in the [design log](docs/design_decisions.md)) |
 | Dataset | `HumanDemo` → LeRobotDataset v3 export and reload | ✅ |
-| Sim | `SceneTwin`: real layout and camera in the simulator | ✅ (real clip needed) |
-| Sim | Real and sim-twin side-by-side replay (`03_replay.py`, empty now) | ⬜ |
+| Sim | `SceneTwin`: real layout and camera in the simulator | ✅ on real clips (notebook 11) |
+| Sim | Real and sim-twin side-by-side replay | 🟡 recorded dataset next to robot replay for one clip (notebook 11); that replay timed out; `03_replay.py` is still empty |
 | Teleop | Hand-clip and keyboard teleop of the Panda, live window | ✅ |
-| Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation, robot from the home pose | ✅ on made-up hand paths ([D-010](docs/design_decisions.md)); no real clip yet |
-| Retargeting | Tune grasp height and offset once. Measure success on 20 rollouts. | ⬜ |
+| Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation, robot from the home pose | ✅ ran on 12 real clips (59 % of rollouts succeed, see generation); first built on made-up hand paths ([D-010](docs/design_decisions.md)) |
+| Retargeting | Tune grasp height and offset once | 🟡 success measured over 170 rollouts with default settings; nothing tuned |
 | Generation | `DemoGenerator` and `04_generate_dataset.py` (success only, one process) | ✅ first run on 12 cleaned real clips: 100 successes of 170 attempts (59 %); multiprocess not done |
-| Training | `05_train.sh`. ACT fallback (about 1 h), then SmolVLA fine-tune. | ⬜ |
-| Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | ⬜ |
-| Figures | GIFs, 3D trajectory plot (human TCP and robot EEF), data-multiplier curve, one failure case | ⬜ |
+| Generation | MimicGen-style expansion (`22_mimicgen_expand.py`: nearest-layout sources, action noise, step limit) | 🟡 built and tested; its runs are not part of the 100-episode dataset and no result is claimed here |
+| Training | SmolVLA expert-only fine-tune, 3000 steps, batch 16 (`19_train_smolvla.py`, D-013); ACT fallback not done | 🟡 one run, one seed |
+| Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | 🟡 checkpoints evaluated with N = 10 (`23_eval_checkpoints.py`); comparison with the pretrained checkpoints on held-out layouts started (notebook 14, no result here yet); N = 50 and the zero-shot and open-loop-replay baselines not run |
+| Figures | GIFs (episode dashboard, dataset and replay, scene orbit, generated clips in the slides), 3D trajectory plot, data-multiplier curve, one failure case | 🟡 GIFs done; the plot, curve and failure case are not |
 | Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. Real scans of the bowl, the plate and the whole table scene exist (metric ChArUco frame for the scene, [D-009](docs/design_decisions.md); lowered SIFT threshold and floor-based crop, [D-001, D-004](docs/design_decisions.md)), and the scanned bowl and plate are composited into LIBERO ([gallery](#what-the-splat-route-has-produced-so-far)). The plate has gaps; the filled version uses a shape prior. One scene, two clips each. The scene splat is not in LIBERO yet, and the collision mesh is not wired into the experiment. |
 | Stretch | Second camera view for stereo, only if monocular depth fails | ⬜ |
 | Submission | Fresh-clone test, results table, honest "what did not work", public repository | ⬜ |
@@ -285,8 +290,10 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 | [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) | SmolVLA benchmark in LIBERO: the two most-liked LIBERO checkpoints in three scene conditions (stock, cleared table, cleared table with real-size bowl and plate), success with Wilson intervals, how far episodes got, open-loop action error, rollout videos. |
 | [10_clip_cleaning](examples/10_clip_cleaning.ipynb) | Cleaning real phone clips before extraction: per-frame filters (no hand, two hands, bad fit, image edge, depth), the cut to one open-close-open cycle, clip filters, the per-clip timeline and the proposed `cuts.json`. Real clips, not committed. |
 | [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb) | One cleaned real clip end to end: overlay video, LeRobot episode dashboard, interactive TCP and aperture, the human's bowl and plate layout in the sim, robot replay in the scaled LIBERO scene, dataset and replay side by side. Real clip, not committed. |
+| [13_smolvla_checkpoints](examples/13_smolvla_checkpoints.ipynb) | SmolVLA fine-tuned on the generated dataset, evaluated at every saved checkpoint: closed-loop success (Wilson intervals, failure reasons), open-loop action error on training frames, training loss, rollout videos. |
+| [14_smolvla_model_comparison](examples/14_smolvla_model_comparison.ipynb) | Our fine-tuned policies against the two pretrained LIBERO checkpoints on the same scaled scene and held-out layouts. |
 
-Most notebooks use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). The real capture session is not processed yet; notebooks 06, 10 and 11 are the exception: they read real phone clips (not committed), and 09 reads benchmark results. Each notebook states this in its introduction.
+Notebooks 01 to 05 and 08 use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). Notebooks 06, 10 and 11 read real phone clips (not committed); 09, 13 and 14 read benchmark and evaluation results, 13 and 14 for the policy trained on the generated data. Each notebook states this in its introduction.
 
 ```bash
 uv run jupyter lab examples/
@@ -313,16 +320,18 @@ Reading: the success of both checkpoints depends strongly on where the objects s
 
 ### Planned experiment
 
-There are no results for a policy trained on my data yet. The planned experiment (target task, N = 50 episodes, Wilson 95% CI):
+First result for a policy trained on my data, below, and the rest of the planned experiment (target task, N = 50 episodes, Wilson 95% CI). Only the SmolVLA row has been run, with 10 episodes instead of 50:
 
 | Policy | Trained on | Success |
 |---|---|---|
 | `smolvla_base` zero-shot | nothing from LIBERO | pending |
 | Open-loop retarget replay | one human demo for each rollout, no learning | pending |
-| **SmolVLA (ours)** | generated demos from my phone video only | pending |
+| **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
 | ACT (ours) | same data | pending |
 
 This table will contain only numbers from runs that were executed. Failed runs are included.
+
+**Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit, LIBERO's success check), the same 10 layout seeds for every checkpoint, one training seed. Step 2500 is the best checkpoint (4/10, interval 17 to 69%); the final one is 2/10. Every interval overlaps every other, so the six checkpoints cannot be told apart. Most failures never bring the gripper within 6 cm of the bowl (6 to 9 of 10 at every checkpoint). In open loop, the position error on training frames falls from 0.113 to 0.084 (an all-zero chunk scores 0.137) and gripper sign accuracy rises from 0.92 to 0.96; this is a fit measure on frames the model was trained on, not generalisation. The two public checkpoints scored 0/10 in the same kind of scene (section 9, row 5), but that was a separate evaluation, not paired with this one. The training set contains 5 clips whose release-distance QC gate was waived (7 clips passed it). No baseline (zero-shot, open-loop replay) has been run on this evaluation, so the data's contribution is not isolated. Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
 
 ---
 
