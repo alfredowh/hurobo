@@ -20,7 +20,7 @@ from pathlib import Path
 
 from hurobo.capture_plan import write_stand_in_demos
 from hurobo.demo import HumanDemo
-from hurobo.generate import FPS, DemoGenerator, sim_features
+from hurobo.generate import FPS, RUN_LOG_NAME, DemoGenerator, append_run_record, sim_features
 from hurobo.real_setup import DEFAULT_MEASUREMENTS, RealSetup
 from hurobo.recorder import LeRobotRecorder
 from hurobo.scaled_native import ScaledNativeScene
@@ -58,20 +58,24 @@ def main() -> None:
         args.out, args.repo_id, FPS, sim_features(), robot_type="panda", overwrite=args.overwrite
     ) as recorder:
         stats = generator.generate(args.count, recorder, TASK, args.max_attempts)
-        recorder.write_sidecar(
-            {
-                "experiment": "E1 scaled-native",
-                "human_demos": [path.name for path in paths],
-                "attempted": stats.attempted,
-                "succeeded": stats.succeeded,
-                "failures": dict(stats.failures),
-                "episode_steps": stats.steps,
-                "object_scale_bowl": scene.scales.bowl,
-                "object_scale_plate": scene.scales.plate,
-                "distractors_kept": args.keep_distractors,
-                "seed": args.seed,
-            }
-        )
+        metadata = {
+            "experiment": "E1 scaled-native",
+            "human_demos": [path.name for path in paths],
+            "attempted": stats.attempted,
+            "succeeded": stats.succeeded,
+            "failures": dict(stats.failures),
+            "episode_steps": stats.steps,
+            "object_scale_bowl": scene.scales.bowl,
+            "object_scale_plate": scene.scales.plate,
+            "distractors_kept": args.keep_distractors,
+            "seed": args.seed,
+        }
+        recorder.write_sidecar(metadata)
+    # Next to the dataset's folder, so it survives `--overwrite` of the dataset.
+    append_run_record(
+        args.out.parent / RUN_LOG_NAME,
+        {"dataset": str(args.out), "demos_dir": str(args.demos_dir), "count": args.count, **metadata},
+    )
     print(
         f"{stats.succeeded}/{stats.attempted} rollouts succeeded ({stats.success_rate:.0%}); "
         f"failures: {dict(stats.failures)}"

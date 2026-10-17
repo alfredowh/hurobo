@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 
 from hurobo.demo import HumanDemo
@@ -19,13 +22,15 @@ from hurobo.retarget import (
     RolloutResult,
     RolloutStep,
 )
+from hurobo.rollout_view import RolloutTrace
 from hurobo.scaled_native import ScaledNativeScene, SimLayout, Workspace, table_to_world_map
 from hurobo.teleop import TableToWorld
 from hurobo.utils.signal import speed_percentile
-from hurobo.utils.video import VideoWriter, caption_frame
+from hurobo.utils.video import VideoWriter, caption_frame, draw_gripper_gauge
 
 STATE_NAMES = ["eef_x", "eef_y", "eef_z", "eef_aa_x", "eef_aa_y", "eef_aa_z", "gripper_q1", "gripper_q2"]
 ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz", "gripper"]
+RUN_LOG_NAME = "generation_runs.jsonl"  # next to the dataset folders, e.g. data/e1/
 FPS = 20  # LIBERO's control rate, and `lerobot-eval`'s
 
 
@@ -110,6 +115,19 @@ class GenerationStats:
         return self.succeeded / self.attempted if self.attempted else 0.0
 
 
+def append_run_record(log_path: Path, record: dict[str, Any]) -> None:
+    """Append one generation run to a JSON-lines log that outlives the dataset it describes.
+
+    Args:
+        log_path: the log, e.g. `data/e1/generation_runs.jsonl`; created with its folder if missing.
+        record: JSON-serialisable description of the run; a UTC `time` is added when it has none.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"time": datetime.now(UTC).isoformat(timespec="seconds"), **record}
+    with log_path.open("a") as log:
+        log.write(json.dumps(entry) + "\n")
+
+
 class DemoGenerator:
     """Rolls human demos out on random layouts in a `ScaledNativeScene` and writes the successes."""
 
@@ -154,7 +172,7 @@ class DemoGenerator:
         )
 
     def slowdown_to_robot(
-        self, demo: HumanDemo, eef_path: np.ndarray, percentile: float = 99.0
+        self, demo: HumanDemo, trace: RolloutTrace, percentile: float = 99.0
     ) -> tuple[float, float]:
         """How much slower than recorded the human demo must run to stay within the robot's speed.
 
@@ -163,13 +181,13 @@ class DemoGenerator:
 
         Args:
             demo: the human demo.
-            eef_path: shape (N, 3), end-effector positions of a rollout, one per control step.
+            trace: a rollout of the robot; its end-effector speed gives the limit.
             percentile: speed percentile taken as the robot's limit.
 
         Returns:
             (factor, robot_limit_m_s): factor >= 1, and the limit.
         """
-        limit = speed_percentile(eef_path, np.arange(len(eef_path)) / FPS, percentile)
+        limit = speed_percentile(trace.eef_pos_world, trace.times_s, percentile)
         start, end = self._retargeter().replayed_sample_range(demo)
         return demo.slowdown_for(limit, start, end), limit
 
@@ -210,32 +228,63 @@ class DemoGenerator:
         executor = PlanExecutor(self._scene, self._config)
         return executor.run(obs, plan), executor
 
-    def rollout_with_video(
-        self, demo: HumanDemo, video_path: Path, layout: SimLayout | None = None, size: int = 480
-    ) -> tuple[RolloutResult, np.ndarray]:
-        """Run one rollout and write an agent-view video with the phase as a caption.
+    def rollout_traced(
+        self,
+        demo: HumanDemo,
+        video_path: Path,
+        layout: SimLayout | None = None,
+        size: int = 480,
+        trace_size: int = 256,
+    ) -> RolloutTrace:
+        """Run one rollout, write an agent-view video with the phase as a caption, and keep the trace.
 
         Args:
             demo: the human demo to retarget.
             video_path: output .mp4 (20 fps).
             layout: where the objects go; sampled if None.
             size: video side in pixels.
+            trace_size: side of the (smaller) images kept in the trace for the dashboard.
 
         Returns:
-            (result, eef_path): the outcome, and the end-effector world positions, shape (N, 3), one per step.
+            The outcome and the per-step record.
         """
         steps, executor = self.rollout(demo, layout)
-        eef_path = []
+        frames, eef, opening, actions, phases = [], [], [], [], []
         with VideoWriter(video_path, float(FPS), (size, size)) as writer:
             for step in steps:
                 image = self._scene.task.render_camera("agentview", size, size)
-                writer.write(caption_frame(np.ascontiguousarray(image), step.phase))
-                eef_path.append(np.asarray(step.obs["robot_state"]["eef"]["pos"][0]))
-        return executor.result, np.asarray(eef_path)
+                captioned = caption_frame(np.ascontiguousarray(image), step.phase)
+                writer.write(captioned)
+                finger_qpos = np.asarray(step.obs["robot_state"]["gripper"]["qpos"][0])
+                eef.append(np.asarray(step.obs["robot_state"]["eef"]["pos"][0]))
+                opening.append(float(finger_qpos[0] - finger_qpos[1]))
+                actions.append(step.action)
+                phases.append(step.phase)
+                small = cv2.resize(captioned, (trace_size, trace_size), interpolation=cv2.INTER_AREA)
+                draw_gripper_gauge(
+                    small, opening[-1], step.action[6] > 0, (trace_size - 80, trace_size - 40), 0.09, 0.4
+                )
+                frames.append(small)
+        return RolloutTrace(
+            result=executor.result,
+            frames_bgr=frames,
+            times_s=np.arange(len(frames)) / FPS,
+            eef_pos_world=np.asarray(eef),
+            gripper_opening_m=np.asarray(opening),
+            actions=np.asarray(actions),
+            phases=phases,
+        )
+
+    def rollout_with_video(
+        self, demo: HumanDemo, video_path: Path, layout: SimLayout | None = None, size: int = 480
+    ) -> tuple[RolloutResult, np.ndarray]:
+        """`rollout_traced`, keeping only the outcome and the end-effector world positions, shape (N, 3)."""
+        trace = self.rollout_traced(demo, video_path, layout, size)
+        return trace.result, trace.eef_pos_world
 
     def replay_on_own_layout(
         self, demo: HumanDemo, video_path: Path, size: int = 480, clamp_to_workspace: bool = True
-    ) -> tuple[RolloutResult, SimLayout, np.ndarray]:
+    ) -> tuple[SimLayout, RolloutTrace]:
         """Replay a demo on the bowl and plate positions the human recorded, with a video.
 
         Args:
@@ -245,12 +294,10 @@ class DemoGenerator:
             clamp_to_workspace: snap the layout into the work area (see `layout_of_demo`).
 
         Returns:
-            (result, layout, eef_path): the outcome, the layout that was used and the end-effector world
-            positions, shape (N, 3), one per step.
+            (layout, trace): the layout used and the rollout's record (`trace.result` is the outcome).
         """
         layout = self.layout_of_demo(demo, clamp_to_workspace)
-        result, eef_path = self.rollout_with_video(demo, video_path, layout, size)
-        return result, layout, eef_path
+        return layout, self.rollout_traced(demo, video_path, layout, size)
 
     def generate(
         self, count: int, recorder: LeRobotRecorder, task: str, max_attempts: int | None = None

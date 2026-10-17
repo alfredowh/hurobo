@@ -71,6 +71,8 @@ class SyncedDashboard:
         signal_panels: Sequence[SignalPanel] = (),
         hand_landmarks_xyz: np.ndarray | None = None,
         size_px: tuple[int, int] = (1280, 720),
+        aperture_title: str = "pinch aperture",
+        aperture_label: str = "aperture (cm)",
     ) -> None:
         """Build the figure from a whole clip or episode.
 
@@ -92,6 +94,8 @@ class SyncedDashboard:
                 (NaN = no hand); the 3D panel then draws the whole hand pose, with the pinch
                 fingertips and the segment between them.
             size_px: (width, height) of the output frames; keep both even for H.264.
+            aperture_title: title of the aperture panel ("gripper opening" for a robot).
+            aperture_label: y-axis label of the aperture panel.
 
         Raises:
             ValueError: if the inputs differ in length or there is no valid sample at all.
@@ -132,7 +136,12 @@ class SyncedDashboard:
         self._cursors: list = []
         self._dots: list[tuple] = []  # (line, series values) pairs that follow the cursor
         self._build_aperture_panel(
-            self._figure.add_subplot(bottom_grid[0, 0]), grasp_mask, close_threshold_m, open_threshold_m
+            self._figure.add_subplot(bottom_grid[0, 0]),
+            grasp_mask,
+            close_threshold_m,
+            open_threshold_m,
+            aperture_title,
+            aperture_label,
         )
         for k, panel in enumerate(signal_panels, start=1):
             self._build_signal_panel(self._figure.add_subplot(bottom_grid[0, k]), panel)
@@ -175,10 +184,12 @@ class SyncedDashboard:
         grasp_mask: np.ndarray | None,
         close_threshold_m: float | None,
         open_threshold_m: float | None,
+        title: str,
+        y_label: str,
     ) -> None:
-        axes.set_title("pinch aperture")
+        axes.set_title(title)
         axes.set_xlabel("time (s)")
-        axes.set_ylabel("aperture (cm)")
+        axes.set_ylabel(y_label)
         if close_threshold_m is not None and open_threshold_m is not None:
             axes.axhspan(close_threshold_m * 100, open_threshold_m * 100, color=_GREY, alpha=0.3)
         if grasp_mask is not None:

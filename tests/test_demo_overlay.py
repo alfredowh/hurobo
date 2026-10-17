@@ -133,3 +133,26 @@ def test_side_by_side_video_holds_the_shorter_one(tmp_path: Path) -> None:
     frames = list(read_frames(out))
     assert len(frames) == 12
     assert frames[0].shape[1] > 64  # two panels wide
+
+
+def test_rollout_dashboard_renders_a_frame_per_step() -> None:
+    from hurobo.retarget import RolloutResult
+    from hurobo.rollout_view import RolloutTrace, rollout_dashboard
+
+    n = 6
+    actions = np.zeros((n, 7))
+    actions[3:, 6] = 1.0
+    trace = RolloutTrace(
+        result=RolloutResult(steps=n),
+        frames_bgr=[np.zeros((64, 64, 3), np.uint8) for _ in range(n)],
+        times_s=np.arange(n) / 20.0,
+        eef_pos_world=np.column_stack([np.linspace(0, 0.1, n), np.zeros(n), np.linspace(1.0, 1.1, n)]),
+        gripper_opening_m=np.where(np.arange(n) < 3, 0.08, 0.02),
+        actions=actions,
+        phases=["approach"] * 3 + ["carry"] * 3,
+    )
+    dashboard = rollout_dashboard(trace)
+    assert len(dashboard) == n
+    width, height = dashboard.frame_size
+    assert dashboard.render(4).shape == (height, width, 3)
+    assert trace.gripper_closed.tolist() == [False] * 3 + [True] * 3

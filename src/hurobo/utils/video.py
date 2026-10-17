@@ -387,37 +387,48 @@ def draw_gripper_gauge(
     grasping: bool,
     origin_px: tuple[int, int],
     max_aperture_m: float = 0.12,
-    width_px: int = 150,
+    scale: float = 1.0,
 ) -> None:
-    """Draws a two-finger gripper symbol whose gap follows the pinch aperture, in place.
+    """Draws a two-finger gripper symbol whose gap follows the aperture, in place.
 
     Args:
         frame_bgr: image to draw on.
-        aperture_m: thumb-index distance; the gap is drawn to scale up to `max_aperture_m`.
-        grasping: hysteresis-thresholded grasp state; the fingers are red when closed, green when open.
+        aperture_m: thumb-index or finger distance; the gap is drawn to scale up to `max_aperture_m`.
+        grasping: grasp state; the fingers are red when closed, green when open.
         origin_px: top-left corner of the symbol.
-        max_aperture_m: aperture that fills `width_px`.
-        width_px: width of the symbol.
+        max_aperture_m: aperture that fills the symbol's width.
+        scale: size of the symbol; 1 is 150 px wide, 0.4 is 2.5 times smaller.
     """
     x0, y0 = origin_px
+    width_px = round(150 * scale)
     gap = round(width_px * min(max(aperture_m, 0.0) / max_aperture_m, 1.0))
-    finger_w, finger_h = 14, 46
+    finger_w, finger_h = max(round(14 * scale), 2), max(round(46 * scale), 6)
+    pad = max(round(6 * scale), 2)
     centre = x0 + width_px // 2
     colour = (0, 0, 230) if grasping else (0, 200, 0)
-    cv2.rectangle(frame_bgr, (x0 - 6, y0 - 8), (x0 + width_px + 6, y0 + finger_h + 30), (30, 30, 30), -1)
+    label = f"{'CLOSED' if grasping else 'open'} {100 * aperture_m:.1f} cm"
+    font = max(0.55 * scale, 0.3)
+    (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font, 1)
+    box_right = x0 + max(width_px, text_w)
+    cv2.rectangle(
+        frame_bgr,
+        (x0 - pad, y0 - pad),
+        (box_right + pad, y0 + finger_h + text_h + 3 * pad),
+        (30, 30, 30),
+        -1,
+    )
     cv2.rectangle(
         frame_bgr, (centre - gap // 2 - finger_w, y0), (centre - gap // 2, y0 + finger_h), colour, -1
     )
     cv2.rectangle(
         frame_bgr, (centre + gap // 2, y0), (centre + gap // 2 + finger_w, y0 + finger_h), colour, -1
     )
-    label = f"{'CLOSED' if grasping else 'open'}  {100 * aperture_m:.1f} cm"
     cv2.putText(
         frame_bgr,
         label,
-        (x0, y0 + finger_h + 22),
+        (x0, y0 + finger_h + text_h + pad),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
+        font,
         (255, 255, 255),
         1,
         cv2.LINE_AA,

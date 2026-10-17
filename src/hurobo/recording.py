@@ -651,14 +651,14 @@ def session_commands(
             f"--intrinsics {intrinsics_path} --cuts {out_dir}/cuts.json --out {demos}",
         ),
         (
-            "5. optional: the human dataset in LeRobot format (what you recorded, for the record)",
+            "5. the human dataset in LeRobot format (what you recorded, for the record)",
             f"uv run python scripts/11_export_human_dataset.py {demos} "
             f"--intrinsics {intrinsics_path} --out {work_dir}/human",
         ),
         (
             "6. replay every demo on the robot, from the home pose, in the scaled scene (videos)",
             f"MUJOCO_GL=egl uv run python scripts/03_replay.py {demos} --setup {setup_path} "
-            f"--out {work_dir}/replay",
+            f"--out {work_dir}/replay --clamp-layout",
         ),
         (
             "7. generate the robot dataset (successful rollouts on new layouts)",
