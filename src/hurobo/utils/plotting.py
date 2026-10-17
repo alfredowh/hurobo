@@ -348,3 +348,47 @@ def plot_clip_sheet(
     figure.suptitle("Recording plan: blue bowl, red plate, orange hand start, board in black", fontsize=10)
     figure.tight_layout()
     return figure
+
+
+def plot_success_bars(
+    categories: list[str],
+    successes_by_series: dict[str, list[int]],
+    trials: int,
+    colors: dict[str, str],
+    xlabel: str,
+    trials_overrides: dict[tuple[str, int], int] | None = None,
+) -> Figure:
+    """Horizontal grouped bar chart of success counts, each bar labelled "k / n".
+
+    Args:
+        categories: one label per bar group, listed top to bottom.
+        successes_by_series: series name -> success count per category.
+        trials: episodes per bar (the x axis runs from 0 to this).
+        colors: series name -> bar colour.
+        xlabel: x axis label.
+        trials_overrides: (series name, category index) -> episodes, for a bar
+            that has fewer episodes than `trials`.
+
+    Returns:
+        The figure; the caller saves or shows it.
+    """
+    trials_overrides = trials_overrides or {}
+    num_series = len(successes_by_series)
+    bar_height = 0.8 / num_series
+    fig, ax = plt.subplots(figsize=(7, 0.55 * len(categories) * num_series + 1.2))
+    for series_index, (name, counts) in enumerate(successes_by_series.items()):
+        y = np.arange(len(categories)) + (series_index - (num_series - 1) / 2) * bar_height
+        ax.barh(y, counts, height=bar_height, color=colors[name], label=name)
+        for category_index, (y_i, count) in enumerate(zip(y, counts, strict=True)):
+            bar_trials = trials_overrides.get((name, category_index), trials)
+            ax.text(count + trials * 0.01, y_i, f"{count} / {bar_trials}", va="center", fontsize=9)
+    ax.set_yticks(np.arange(len(categories)), categories)
+    ax.invert_yaxis()
+    ax.set_xlim(0, trials * 1.15)
+    ax.set_xticks(range(0, trials + 1, 5 if trials > 10 else 2))
+    ax.set_xlabel(xlabel)
+    ax.spines[["top", "right"]].set_visible(False)
+    if num_series > 1:
+        ax.legend(loc="lower right", frameon=False, fontsize=9)
+    fig.tight_layout()
+    return fig
