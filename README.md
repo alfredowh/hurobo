@@ -2,15 +2,13 @@
 
 This project trains a small robot foundation model (SmolVLA, 450M parameters) with data from phone videos of a human hand. The policy runs on a Franka Panda arm in the LIBERO simulator.
 
-The robot is not teleoperated. The simulated table is a copy of the real table. The Panda repeats what the human hand did on it.
-
-The first experiment, how to record for it and what the pipeline does with the clips: [docs/experiment_scaled_native.md](docs/experiment_scaled_native.md).
+The robot is not teleoperated. The simulated table is a copy of the real table, and the Panda repeats what the human hand did on it. How to record and what the pipeline does with the clips: [docs/experiment_scaled_native.md](docs/experiment_scaled_native.md).
 
 **Question.** Can human videos improve a small VLA on a new layout and a new object?
 
-**Main concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
+**Concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
 
-**Current state.** The perception, twin, retargeting and generation code is built. It was first tested on made-up hand paths and has now run on real clips: 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. SmolVLA fine-tuned on it reaches 2/10 closed-loop successes at the final checkpoint when started from `smolvla_base`, and 14/20 on held-out layouts when started from `lerobot/smolvla_libero` (see Planned experiment). What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
+**Where it stands.** 12 of 26 recorded clips were cleaned and usable. They gave 100 successful robot episodes (below). SmolVLA fine-tuned on them reaches 14/20 on held-out layouts when started from `lerobot/smolvla_libero` and 3/20 when started from `smolvla_base`; the pretrained checkpoints get 0/20 ([section 9](#9-results)). One seed, N = 20, no baselines yet. Full list: [section 7](#7-status-and-todo).
 
 <p align="center">
   <img src="assets/episode_dashboard.gif" alt="A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action">
@@ -80,12 +78,12 @@ flowchart LR
     I --> J[Evaluate in LIBERO<br/>lerobot-eval]
 ```
 
-1. **Record** human demonstrations with a tripod. Use a ChArUco-calibrated camera. Put printed ArUco markers on the table, bowl and plate.
-2. **Extract** a metric TCP trajectory (midpoint of thumb tip and index tip), a grasp signal from the pinch, and the object poses. Express all of them in the table frame.
-3. **Build a digital twin** of the real layout and camera viewpoint in the simulator (`SceneTwin`). Replay the human motion on the Panda. The side-by-side video of the real clip and the sim twin is the minimum deliverable.
-4. **Multiply the data.** Split each human demo into object-relative segments. Retarget the segments to many simulated object poses. Run them. Keep only the successful runs.
-5. **Train** SmolVLA from `lerobot/smolvla_base`. This model has not seen LIBERO. Use only the generated data. Then each success comes from this pipeline.
-6. **Evaluate** with `lerobot-eval`. Report the success rate with a confidence interval and with baselines.
+1. **Record** with a tripod and a ChArUco-calibrated camera. Printed ArUco markers sit on the table, bowl and plate.
+2. **Extract** a metric TCP trajectory (midpoint of thumb tip and index tip), a grasp signal from the pinch, and the object poses, all in the table frame.
+3. **Twin.** Rebuild the real layout and camera viewpoint in the simulator (`SceneTwin`) and replay the human motion on the Panda. The side-by-side video is the minimum deliverable.
+4. **Multiply.** Split each demo into object-relative segments, retarget them to many simulated object poses, and keep only the successful runs.
+5. **Train** SmolVLA from `lerobot/smolvla_base` (it has not seen LIBERO) on the generated data only.
+6. **Evaluate** with `lerobot-eval`: success rate with a confidence interval, against baselines.
 
 ---
 
@@ -334,26 +332,28 @@ MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace example
 
 No training by me. The two most-liked LIBERO checkpoints on the Hub drive the Panda in the simulator; success is LIBERO's own check. Same layouts for both checkpoints, 300 steps, new action chunk every 10 steps, 10 episodes per cell (one cell has 8). Source: [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) and [D-011](docs/design_decisions.md).
 
-| Scene | What changes | `lerobot/smolvla_libero` | `HuggingFaceVLA/smolvla_libero` |
-|---|---|---|---|
-| 1. Stock | LIBERO's own scene and start positions | 10/10 | 8/10 |
-| 2. Cleared, LIBERO layout | Other objects removed; bowl and plate start where LIBERO puts them | 6/10 | 3/10 |
-| 3. Cleared, new layout | Other objects removed; bowl and plate at random positions | 0/10 | 0/10 |
-| 4. Real size, LIBERO layout | Bowl and plate at the measured real sizes (plate 1.86x wider); LIBERO's placement | 0/10 | 0/8 |
-| 5. Real size, new layout | Real sizes at random positions: the target scene of my experiment | 0/10 | 0/10 |
+<p align="center">
+  <img src="assets/results_pretrained_scenes.png" width="60%" alt="Bar chart: successes of 10 episodes for the two pretrained checkpoints in five scenes">
+</p>
+
+1. **Stock:** LIBERO's own scene and start positions.
+2. **Cleared, LIBERO layout:** other objects removed; bowl and plate start where LIBERO puts them.
+3. **Cleared, new layout:** other objects removed; bowl and plate at random positions.
+4. **Real size, LIBERO layout:** bowl and plate at the measured real sizes (plate 1.86x wider); LIBERO's placement. HuggingFaceVLA has 8 episodes here.
+5. **Real size, new layout:** real sizes at random positions, the target scene of my experiment.
 
 Reading: the success of both checkpoints depends strongly on where the objects start and on their size. A new layout alone takes the better checkpoint from 6/10 to 0/10, and real-size objects give 0 even on LIBERO's own layout. Removing the other objects already lowers success (scene 1 to 2). With 10 episodes per cell the 95% Wilson interval of 0/10 is 0 to 28%, so small differences mean nothing. The cause is not established: candidates not yet tested are the fixed start positions the checkpoints saw in training and the removed distractors. This is why the question above is open: a policy trained on one fixed layout does not carry over to a new layout or a new object, and whether human video fixes that is what the experiment below is for.
 
 ### Planned experiment
 
-First result for a policy trained on my data, below, and the rest of the planned experiment (target task, N = 50 episodes, Wilson 95% CI). Only the SmolVLA row has been run, with 10 episodes instead of 50:
+Target task, N = 50 episodes, Wilson 95% CI. Only the two SmolVLA rows have been run, with 10 episodes instead of 50:
 
 | Policy | Trained on | Success |
 |---|---|---|
 | `smolvla_base` zero-shot | nothing from LIBERO | pending |
 | Open-loop retarget replay | one human demo for each rollout, no learning | pending |
 | **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
-| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | Per checkpoint (500 to 3000): 2, 1, 7, 5, 8, 7 of 10; best step 2500 at 8/10. On 20 held-out layouts: 14/20 (95% CI 48 to 85%), against 3/20 for the `smolvla_base` init (see below) |
+| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | Per checkpoint (500 to 3000): 2, 1, 7, 5, 8, 7 of 10; best step 2500 at 8/10. Held-out result below |
 | ACT (ours) | same data | pending |
 
 This table will contain only numbers from runs that were executed. Failed runs are included.
@@ -363,6 +363,10 @@ This table will contain only numbers from runs that were executed. Failed runs a
 Everything else matches the first run so the two are comparable: the same 100 generated episodes, expert-only training (vision encoder frozen), batch 16, 3000 steps, one seed. The run is started with `scripts/19_train_smolvla.py ... --init-from lerobot/smolvla_libero` and each checkpoint is evaluated with `23_eval_checkpoints.py` (10 episodes, layouts 0 to 9). The best checkpoint of each run is then compared on held-out layouts (100 and up) against the two pretrained checkpoints in [notebook 14](examples/14_smolvla_model_comparison.ipynb).
 
 **Result (held-out layouts 100 to 119, 20 episodes each, scaled scene, best checkpoint of each run at step 2500):**
+
+<p align="center">
+  <img src="assets/results_held_out.png" width="60%" alt="Bar chart: successes of 20 held-out layouts for our two fine-tunes and the two pretrained checkpoints">
+</p>
 
 | Policy | Closed-loop success | 95% Wilson CI | Open-loop position error (all-zero chunk: 0.137) | Gripper sign accuracy |
 |---|---|---|---|---|
