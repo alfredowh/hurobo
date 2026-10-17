@@ -20,7 +20,20 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 *The same clip, side by side: the recorded dataset (left, slowed) and the robot replay of that hand path in the scaled LIBERO scene (right, paced to match). Both sides are time-stretched for viewing. The replay did not complete the task (it timed out, see current state). Same notebook.*
 
-**Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). The 70 failures: 37 "bowl not lifted", 33 timeouts. Kept episodes take 224 to 663 control steps (median 321.5, 35 498 frames at 20 Hz); many are longer than the 300 steps `lerobot-eval` allows, and no length filter was applied to this run. Per rollout: a random bowl and plate position and one of the 12 human demos drawn at random (no nearest-layout selection, no action noise: those are in the separate `22_mimicgen_expand.py`); the approach (last 20 cm of the hand path) is anchored to the bowl, the carry (the bowl's path) to the plate; grasp height, finger yaw and release height are set by the robot, not copied from the human. Each episode has the agent-view and wrist camera. Metadata: `data/e1/generated_clips/hurobo_meta.json` (not committed). Generating all 170 attempts takes roughly 40 to 50 minutes in one process: a 12-attempt test of the same script took 3 min 39 s including start-up, and the file times of the real run span about 40 minutes (no wall-clock time was logged). 5 of the 12 clips are ones whose release-distance QC gate was waived. The success rate is of the generator, not of a trained policy. I have not checked which clips the 100 episodes come from per source.
+**Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). Of the 70 failures, 37 never lifted the bowl and 33 timed out.
+
+| Generated clip 0 | Generated clip 1 | Generated clip 2 |
+| --- | --- | --- |
+| ![Generated clip 0](assets/generated_clip_0.gif) | ![Generated clip 1](assets/generated_clip_1.gif) | ![Generated clip 2](assets/generated_clip_2.gif) |
+
+*First three generated episodes (agent-view camera, real time, subsampled from 20 to 10 fps).*
+
+- **Each rollout:** a random bowl and plate position, and one of the 12 human demos drawn at random. There is no nearest-layout selection and no action noise; those live in `22_mimicgen_expand.py`.
+- **Trajectory:** the approach (last 20 cm of the hand path) is anchored to the bowl and the carry (the bowl's path) to the plate. Grasp height, finger yaw and release height are set by the robot, not copied from the human.
+- **Output:** 35 498 frames at 20 Hz with agent-view and wrist cameras. Episodes run 224 to 663 control steps (median 321.5). Many exceed the 300 steps `lerobot-eval` allows, and no length filter was applied. Metadata is in `data/e1/generated_clips/hurobo_meta.json` (not committed).
+- **Run time:** roughly 40 to 50 minutes in one process. This is estimated from file times and a 12-attempt test (3 min 39 s); the real run's wall-clock time was not logged.
+
+Caveats: 5 of the 12 clips had their release-distance QC gate waived. The 59 % is the generator's success rate, not a trained policy's. I have not checked how many of the 100 episodes come from each source clip.
 
 
 ---
@@ -327,11 +340,25 @@ First result for a policy trained on my data, below, and the rest of the planned
 | `smolvla_base` zero-shot | nothing from LIBERO | pending |
 | Open-loop retarget replay | one human demo for each rollout, no learning | pending |
 | **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
+| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | running, no result yet (see below) |
 | ACT (ours) | same data | pending |
 
 This table will contain only numbers from runs that were executed. Failed runs are included.
 
-**Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit, LIBERO's success check), the same 10 layout seeds for every checkpoint, one training seed. Step 2500 is the best checkpoint (4/10, interval 17 to 69%); the final one is 2/10. Every interval overlaps every other, so the six checkpoints cannot be told apart. Most failures never bring the gripper within 6 cm of the bowl (6 to 9 of 10 at every checkpoint). In open loop, the position error on training frames falls from 0.113 to 0.084 (an all-zero chunk scores 0.137) and gripper sign accuracy rises from 0.92 to 0.96; this is a fit measure on frames the model was trained on, not generalisation. The two public checkpoints scored 0/10 in the same kind of scene (section 9, row 5), but that was a separate evaluation, not paired with this one. The training set contains 5 clips whose release-distance QC gate was waived (7 clips passed it). No baseline (zero-shot, open-loop replay) has been run on this evaluation, so the data's contribution is not isolated. Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
+**Second experiment: start from `lerobot/smolvla_libero`.** The first fine-tune starts from `smolvla_base`, which has never seen LIBERO. The second starts from `lerobot/smolvla_libero`, which was trained on LIBERO's own demonstrations: it succeeds 10/10 on the stock scene but 0/10 in the scaled scene (section 9, scene 5). The question is whether that prior helps once the policy is fine-tuned on demonstrations generated from my 12 clips, or gets in the way.
+
+Everything else matches the first run so the two are comparable: the same 100 generated episodes, expert-only training (vision encoder frozen), batch 16, 3000 steps, one seed. The run is started with `scripts/19_train_smolvla.py ... --init-from lerobot/smolvla_libero` and each checkpoint is evaluated with `23_eval_checkpoints.py` (10 episodes, layouts 0 to 9). The best checkpoint of each run is then compared on held-out layouts (100 and up) against the two pretrained checkpoints in [notebook 14](examples/14_smolvla_model_comparison.ipynb).
+
+Status: training and evaluation are still running, so there are no results yet. Limits: one seed and a small N, so the two starting points can only be told apart if their Wilson intervals separate. The best checkpoint is picked on the layouts it is first evaluated on, which is why the held-out comparison exists.
+
+**Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit), with the same 10 layouts for every checkpoint and one training seed.
+
+- **Success:** step 2500 is best at 4/10 (interval 17 to 69%); the final checkpoint is 2/10. All intervals overlap, so the six checkpoints cannot be told apart.
+- **Failures:** most runs never bring the gripper within 6 cm of the bowl (6 to 9 of 10 at every checkpoint).
+- **Open loop:** position error on training frames falls from 0.113 to 0.084 (an all-zero chunk scores 0.137), and gripper sign accuracy rises from 0.92 to 0.96. This measures fit on frames the model was trained on, not generalisation.
+- **Caveats:** the two public checkpoints scored 0/10 in the same kind of scene (section 9, row 5), but in a separate, unpaired evaluation. The training set includes 5 clips with the release-distance QC gate waived (7 passed). No zero-shot or open-loop replay baseline has been run, so the data's contribution is not isolated.
+
+Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
 
 ---
 
