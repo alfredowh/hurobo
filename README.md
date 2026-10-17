@@ -22,13 +22,13 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). Of the 70 failures, 37 never lifted the bowl and 33 timed out.
 
-![Generated clip 0: agent view (left) and wrist view (right)](assets/generated_clip_0_two_views.gif)
+<p align="center">
+  <img src="assets/generated_clip_0_stacked.gif" width="22%" alt="Generated clip 0: agent view (top) and wrist view (bottom)">
+  <img src="assets/generated_clip_1_stacked.gif" width="22%" alt="Generated clip 1: agent view (top) and wrist view (bottom)">
+  <img src="assets/generated_clip_2_stacked.gif" width="22%" alt="Generated clip 2: agent view (top) and wrist view (bottom)">
+</p>
 
-![Generated clip 1: agent view (left) and wrist view (right)](assets/generated_clip_1_two_views.gif)
-
-![Generated clip 2: agent view (left) and wrist view (right)](assets/generated_clip_2_two_views.gif)
-
-*First three generated episodes (agent-view camera left, wrist camera right, real time, subsampled from 20 to 10 fps).*
+*First three generated episodes (agent-view camera top, wrist camera bottom, real time, subsampled from 20 to 10 fps).*
 
 - **Each rollout:** a random bowl and plate position, and one of the 12 human demos drawn at random. There is no nearest-layout selection and no action noise; those live in `22_mimicgen_expand.py`.
 - **Trajectory:** the approach (last 20 cm of the hand path) is anchored to the bowl and the carry (the bowl's path) to the plate. Grasp height, finger yaw and release height are set by the robot, not copied from the human.
