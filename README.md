@@ -22,9 +22,11 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Generated dataset (first run).** From the 12 cleaned clips, `scripts/04_generate_dataset.py` attempted 170 rollouts in the scaled LIBERO scene (bowl x1.23, plate x1.85 of LIBERO's size, no distractors, seed 0) and kept 100 successes (59 %). Of the 70 failures, 37 never lifted the bowl and 33 timed out.
 
-| Generated clip 0 | Generated clip 1 | Generated clip 2 |
-| --- | --- | --- |
-| ![Generated clip 0](assets/generated_clip_0.gif) | ![Generated clip 1](assets/generated_clip_1.gif) | ![Generated clip 2](assets/generated_clip_2.gif) |
+![Generated clip 0: agent view (left) and wrist view (right)](assets/generated_clip_0_two_views.gif)
+
+![Generated clip 1: agent view (left) and wrist view (right)](assets/generated_clip_1_two_views.gif)
+
+![Generated clip 2: agent view (left) and wrist view (right)](assets/generated_clip_2_two_views.gif)
 
 *First three generated episodes (agent-view camera left, wrist camera right, real time, subsampled from 20 to 10 fps).*
 
