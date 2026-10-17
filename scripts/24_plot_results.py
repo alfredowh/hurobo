@@ -4,7 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from hurobo.utils.plotting import plot_success_bars
+from hurobo.utils.plotting import plot_policy_comparison, plot_success_bars
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 TEAL, ORANGE, BLUE, GREY = "#1F8A84", "#E06A1F", "#5B9BD5", "#8A96A0"
@@ -41,12 +41,14 @@ def main() -> None:
     fig.savefig(ASSETS / "results_pretrained_scenes.png", dpi=150)
     plt.close(fig)
 
-    fig = plot_success_bars(
+    fig = plot_policy_comparison(
         HELD_OUT,
-        {"successes of 20": [14, 3, 0, 0]},
+        successes=[14, 3, 0, 0],
         trials=20,
-        colors={"successes of 20": TEAL},
-        xlabel="successes of 20 held-out layouts",
+        position_error=[0.075, 0.087, 0.343, 0.266],
+        gripper_sign_accuracy=[0.969, 0.963, 0.419, 0.410],
+        zero_chunk_error=0.137,
+        colors=[TEAL, BLUE, GREY, GREY],
     )
     fig.savefig(ASSETS / "results_held_out.png", dpi=150)
     plt.close(fig)

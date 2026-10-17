@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+
+from hurobo.utils.stats import wilson_interval
 
 if TYPE_CHECKING:
     from hurobo.capture_plan import CapturePlanner, PlannedClip
@@ -350,6 +353,19 @@ def plot_clip_sheet(
     return figure
 
 
+INK, MUTED, GRID = "#1C2630", "#6B7785", "#E6E9ED"
+
+
+def _style_axis(ax: Axes) -> None:
+    """Apply the shared clean look: no frame, light vertical grid, muted ticks."""
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+    ax.tick_params(axis="y", length=0, labelcolor=INK, labelsize=9.5)
+    ax.tick_params(axis="x", colors=MUTED, labelsize=9)
+    ax.xaxis.grid(True, color=GRID, linewidth=1)
+    ax.set_axisbelow(True)
+
+
 def plot_success_bars(
     categories: list[str],
     successes_by_series: dict[str, list[int]],
@@ -375,20 +391,109 @@ def plot_success_bars(
     trials_overrides = trials_overrides or {}
     num_series = len(successes_by_series)
     bar_height = 0.8 / num_series
-    fig, ax = plt.subplots(figsize=(7, 0.55 * len(categories) * num_series + 1.2))
+    fig, ax = plt.subplots(figsize=(7, 0.26 * len(categories) * num_series + 0.75))
     for series_index, (name, counts) in enumerate(successes_by_series.items()):
         y = np.arange(len(categories)) + (series_index - (num_series - 1) / 2) * bar_height
-        ax.barh(y, counts, height=bar_height, color=colors[name], label=name)
+        ax.barh(y, counts, height=bar_height * 0.9, color=colors[name], label=name)
         for category_index, (y_i, count) in enumerate(zip(y, counts, strict=True)):
             bar_trials = trials_overrides.get((name, category_index), trials)
-            ax.text(count + trials * 0.01, y_i, f"{count} / {bar_trials}", va="center", fontsize=9)
+            ax.text(
+                count + trials * 0.015,
+                y_i,
+                f"{count} / {bar_trials}",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                color=INK,
+            )
     ax.set_yticks(np.arange(len(categories)), categories)
     ax.invert_yaxis()
-    ax.set_xlim(0, trials * 1.15)
+    ax.set_xlim(0, trials * 1.18)
     ax.set_xticks(range(0, trials + 1, 5 if trials > 10 else 2))
-    ax.set_xlabel(xlabel)
-    ax.spines[["top", "right"]].set_visible(False)
+    ax.set_xlabel(xlabel, color=MUTED, fontsize=9)
+    _style_axis(ax)
     if num_series > 1:
-        ax.legend(loc="lower right", frameon=False, fontsize=9)
+        ax.legend(loc="lower right", frameon=False, fontsize=9, labelcolor=INK)
+    fig.tight_layout()
+    return fig
+
+
+def plot_policy_comparison(
+    names: list[str],
+    successes: list[int],
+    trials: int,
+    position_error: list[float],
+    gripper_sign_accuracy: list[float],
+    zero_chunk_error: float,
+    colors: list[str],
+) -> Figure:
+    """Per policy, three aligned panels: success with Wilson CI, open-loop position error, gripper accuracy.
+
+    Args:
+        names: policy labels, listed top to bottom.
+        successes: closed-loop successes per policy.
+        trials: episodes per policy.
+        position_error: open-loop position error per policy (lower is better).
+        gripper_sign_accuracy: open-loop gripper sign accuracy per policy, in [0, 1].
+        zero_chunk_error: position error of an all-zero action chunk, drawn as the "do nothing" reference.
+        colors: bar colour per policy.
+
+    Returns:
+        The figure; the caller saves or shows it.
+    """
+    y = np.arange(len(names))
+    fig, (ax_success, ax_error, ax_gripper) = plt.subplots(
+        1, 3, figsize=(10, 0.45 * len(names) + 1.2), sharey=True, gridspec_kw={"width_ratios": [1.5, 1, 1]}
+    )
+
+    rates = np.array(successes) / trials
+    intervals = np.array([wilson_interval(k, trials) for k in successes])
+    ax_success.barh(y, rates * 100, height=0.7, color=colors)
+    ax_success.errorbar(
+        rates * 100,
+        y,
+        xerr=[rates * 100 - intervals[:, 0] * 100, intervals[:, 1] * 100 - rates * 100],
+        fmt="none",
+        ecolor=INK,
+        elinewidth=1.6,
+        capsize=4,
+    )
+    for y_i, k, high in zip(y, successes, intervals[:, 1], strict=True):
+        ax_success.text(
+            high * 100 + 2.5, y_i, f"{k} / {trials}", va="center", fontsize=10, fontweight="bold", color=INK
+        )
+    ax_success.set_xlim(0, 118)
+    ax_success.set_xticks(range(0, 101, 25))
+    ax_success.set_xticklabels([f"{t}%" for t in range(0, 101, 25)])
+    ax_success.set_title("Closed-loop success\n95% Wilson CI", loc="left", fontsize=10, color=INK, pad=6)
+
+    ax_error.barh(y, position_error, height=0.7, color=colors)
+    ax_error.axvline(zero_chunk_error, color=MUTED, linestyle="--", linewidth=1.2)
+    ax_error.text(zero_chunk_error, -0.55, "all-zero chunk", ha="center", fontsize=8, color=MUTED)
+    for y_i, value in zip(y, position_error, strict=True):
+        ax_error.text(
+            value + 0.008,
+            y_i,
+            f"{value:.3f}",
+            va="center",
+            fontsize=9,
+            color=INK,
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
+            zorder=3,
+        )
+    ax_error.set_xlim(0, max(position_error) * 1.25)
+    ax_error.set_title("Open-loop position error\nlower is better", loc="left", fontsize=10, color=INK, pad=6)
+
+    ax_gripper.barh(y, gripper_sign_accuracy, height=0.7, color=colors)
+    for y_i, value in zip(y, gripper_sign_accuracy, strict=True):
+        ax_gripper.text(value + 0.015, y_i, f"{value:.3f}", va="center", fontsize=9, color=INK)
+    ax_gripper.set_xlim(0, 1.18)
+    ax_gripper.set_xticks([0, 0.5, 1.0])
+    ax_gripper.set_title("Open-loop gripper\nsign accuracy", loc="left", fontsize=10, color=INK, pad=6)
+
+    ax_success.set_yticks(y, names)
+    ax_success.set_ylim(len(names) - 0.5, -0.75)
+    for ax in (ax_success, ax_error, ax_gripper):
+        _style_axis(ax)
     fig.tight_layout()
     return fig
