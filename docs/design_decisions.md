@@ -41,6 +41,7 @@ happened **after** that: defaults that did not work on our data, and what we did
 | Retargeting | MimicGen idea (concept only) | Novel (own code) | MimicGen is cited, not installed. D-010. |
 | LIBERO scene for E1 (scaled bowl and plate, other objects parked) | `libero_goal` task 8 | **Modified** | D-010. Our own env loop is needed; `lerobot-eval` rebuilds the stock scene. |
 | Table frame from a ChArUco board for human clips | OpenCV ArUco/ChArUco | Novel (own code, `BoardMarkerPoseEstimator`) | Same frame as the table scans (D-009). D-010. |
+| Demo expansion (nearest-layout and per-subtask source choice, action noise, source screening) | MimicGen (Mandlekar et al., CoRL 2023); SkillMimicGen and DexMimicGen read, not used | **Modified** (own code, `mimicgen.py`, separate from `generate.py`) | D-013. Ideas reused: nearest-neighbour and per-subtask source selection, action noise sigma 0.05, success filter. Departed: no object-pose SE(3) transform of whole segments (the retargeter's bending is kept), no hand orientation, source screening added. Not the pipeline default. |
 
 ---
 
@@ -272,6 +273,7 @@ Two related findings from the same clips, recorded so they are not re-tried:
 | Held-out views neighbour training views along the same lap, and PSNR is dominated by floor pixels. | `SplatTrainer`, `scan_sweep` | PSNR does not measure novel viewpoints or bowl quality. |
 | Marker size: `test_03` fails the position gates (grasp 0.45 m from the bowl marker, release 0.33 m from the plate marker) with the assumed 6.0 cm printed markers. Both marker poses lie 0.26 m below the table and need the same distance scale, 0.65, as the hand's anchor scale (0.65), which implies markers of about 3.9 cm. With `--marker-size-m 0.039` `test_03` passes every gate (grasp 6.5 cm from the bowl centre, release 3.3 cm from the plate marker). **Not applied as a default: the printed size has not been measured.** | `RecordingSpec.marker_length_m`, `02_extract_demos.py --marker-size-m`, `17_check_capture.py` | Poses of the pad and plate markers are wrong by the size ratio until the real size is entered. |
 | The cleaner's grasp/release (merged flickers, `CleaningConfig.min_open_s`) and the extractor's (smoothed hysteresis) are computed separately. Seen on `test_04`: the cleaner keeps 5.73-14.56 s as a full cycle, the extraction of that cut reports "no release detected". | `ClipCleaner.closed_signal`, `DemoExtractor` | A clip the cleaner accepts can still fail the extraction gates. |
+| Of the 7 usable real clips, 3 (`233607`, `234347`, `234603`) never give a successful rollout as the approach source (0 of 11-62 attempts in every run); the cause is not diagnosed. `DemoGenerator` draws them uniformly, so they cost about 3/7 of its rollouts. | `ObjectCentricRetargeter`, D-013 | Success rate of `scripts/04` is capped by the share of good sources. |
 
 ### D-008 · 2026-10-13 · Training knobs do not fill the plate (negative result)
 
@@ -393,6 +395,33 @@ Replan every 10 actions, 300 steps, 10 episodes per cell, same layout seeds for 
 **Evidence.** `uv run python scripts/19_train_smolvla.py data/e1/generated_clips --out outputs/e1_smolvla_ckpts/run --steps 3000 --batch-size 16 --save-freq 500 --lr 1e-4 --warmup-steps 100 --decay-steps 3000 --log-freq 50`, then `MUJOCO_GL=egl uv run python scripts/23_eval_checkpoints.py outputs/e1_smolvla_ckpts/run --dataset data/e1/generated_clips --out results/smolvla_ckpts --episodes 10 --max-steps 500 --watch --final-step 3000`; results table and figures in `examples/13_smolvla_checkpoints.ipynb`.
 **Status and limits.** Validated only on this dataset: 100 generated episodes from 12 real clips, of which 5 clips had their release-distance QC gate waived by the user. One training seed, 10 closed-loop episodes per checkpoint (Wilson intervals are wide; differences between checkpoints are noise unless the intervals do not overlap), no held-out episodes for the open-loop error. **Result (scratch, not README):** closed-loop success 0, 2, 1, 1, 4, 2 of 10 at steps 500 to 3000 (Wilson intervals overlap everywhere: no step-to-step difference is established, only that the policy sometimes completes the task); open-loop position error on training frames fell from 0.113 to 0.084 (do-nothing baseline 0.137) and gripper sign accuracy rose from 0.92 to 0.96; training loss 0.42 at step 500, 0.24 at step 3000, still slowly falling when the rate reached its floor.
 **README:** not added: single seed, 10 episodes per checkpoint, nothing tuned.
+
+### D-013 · 2026-10-17 · MimicGen-style expansion: source screening and a length filter matter more than nearest-neighbour choice or noise
+
+**Component:** `hurobo.mimicgen`, `hurobo.utils.mimicgen_view`, `scripts/22_mimicgen_expand.py`, notebook 12. **Status:** Modified (MimicGen's ideas, our code; `generate.py`, `retarget.py` and `scripts/04` are untouched and remain the defaults).
+
+**Symptom.** On the 7 usable real clips (`data/e1/demos_clips`, `summary.json` "usable"), 120 random layouts, `scripts/04`-style rollouts (`StockBaseline` drives `DemoGenerator.rollout`) keep 47 (39 %), and only 18 of the 47 are within the evaluation's 300 steps (median 319, max 634). Three of the seven sources never succeed (0/19, 0/21, 0/20 as approach source), and the executor runs at `action_limit=0.5`.
+**Cause.** Per-source quality differs from 0 to 100 % (approach source `234314`: 14/14 kept in the stock run, but 11/11 of its rollouts in run 02 were over 300 steps); the cause of the bad ones is not diagnosed (open issues). Episode length comes from the slow default speed. Nearest-neighbour choice *alone* made it worse (see the table): the nearest source to a layout is often one of the bad ones.
+**Upstream defaults.** MimicGen: source chosen uniformly or among the `nn_k` nearest by object pose (`nn_k=3` for its Square and Nut Assembly tasks), per-subtask selection a toggle, action noise sigma 0.05 in simulation, success filter only, no screening of sources, linear interpolation between segments.
+**Change.** New, separate module: `SourceSelector` (nearest layout, separately for the approach by bowl position and the carry by the bowl-to-plate vector), `MixedRetargeter` (approach of one demo, carry of another; valid because the parent already bends each carry to start at the bowl and end on the plate), `NoisyPlanExecutor` (noise on the six pose dimensions, not in the grasp and release phases, recorded as executed), a filter that drops successes longer than 300 steps, and `MimicGenExpander.screen` (each source rolled out alone on 6 shared layouts, dropped below 25 % success; this one is not in MimicGen). Speed is the existing `RetargetConfig.action_limit`, set to 0.8 on the command line.
+**Evidence.** Same 100 layouts (`--seed 0`) in all rows, dry runs, `MUJOCO_GL=egl uv run python scripts/22_mimicgen_expand.py data/e1/demos_clips --out data/e1/mimicgen/<run> --attempts 100 ...`; reports in `data/e1/mimicgen/run_0*/report.json` (not committed). "Kept" counts rollouts accepted by LIBERO and, for MimicGen-style, within 300 steps.
+
+| Run | Settings | Kept / attempts | Within 300 steps | Median steps |
+|---|---|---|---|---|
+| 01 stock | uniform source, speed 0.5 (120 layouts) | 47/120 | 18 | 319 |
+| 06 stock | uniform source, speed 0.8 | 38/100 | 21 | 234 |
+| 01 mimicgen | nn_k 3, noise 0.05, speed 0.5, 120 layouts | 15/120 | 15 | 285 |
+| 03 | nn_k 1, noise 0.05, speed 0.5, 120 layouts | 5/120 | 5 | 291 |
+| 06 mimicgen | nn_k 3, noise 0.05, speed 0.8, no screening | 38/100 | 38 | 230 |
+| 04 | + screening, speed 0.5 | 51/100 | 51 | 256 |
+| 05 | + screening, speed 0.8 | 72/100 | 72 | 206 |
+| 07 | + screening, speed 0.8, noise 0 | 64/100 | 64 | 195 |
+| 08 | + screening, speed 0.8, uniform source (nn_k 0) | 66/100 | 66 | 206 |
+| 09 | as 05, other seed, writes a dataset (100 episodes of 130 attempts) | 100/125 | 100 | 206 |
+
+Screening kept `233646`, `233859`, `234314`, `234827` in run 05, and `233646`, `234314`, `234827` in run 09 (`233859` had 1 of 6: a 6-layout screen is coarse). Throughput depends on the success rate and on machine load: 650 kept episodes/hour in a 12-rollout smoke test on stand-in demos (one process); 13-340/hour in the table's dry runs (three processes at once, load average 5-16); 163/hour for run 09 (one process, writes video, load 16).
+**Status and limits.** A scratch result, not a repo default and not used by the training run. One seed and 100-120 layouts per row, so differences of 10 points (72 against 64 or 66) are within sampling noise (Wilson 95 % half-width about 9 points at n=100): the data support "screening and speed help a lot", not "noise" or "nn_k 3" helping or hurting by themselves. Whether the injected noise or the source mixing improves the *trained policy* is not measured (no training was run). Validated on 7 real clips of one session, one scene, one object pair. Not done: hand orientation (a `HumanDemo` has only the TCP position), SE(3) transform of whole segments, motion-planned links (SkillMimicGen), per-source weighting beyond the keep/drop screen. With 7 sources, `nn_k=3` is nearly half of the sources, so the nearest-neighbour rule has little to select among; the layouts of the 7 clips are also clustered (bowl at table x 0.50-0.61, plate 0.25-0.37 m away mainly along table x), so most new layouts are far from every source and "nearest" is still far.
+**README:** not added: validated on 7 clips, one seed, and nothing trained on it yet.
 
 ---
 

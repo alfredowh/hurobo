@@ -10,7 +10,7 @@ The first experiment, how to record for it and what the pipeline does with the c
 
 **Main concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
 
-**Current state.** The perception, twin, retargeting and generation code is built. It was first tested on made-up hand paths and has now run on real clips: 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. SmolVLA fine-tuned on it reaches 2/10 closed-loop successes at the final checkpoint (see Planned experiment). What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
+**Current state.** The perception, twin, retargeting and generation code is built. It was first tested on made-up hand paths and has now run on real clips: 12 of 26 recorded clips were cleaned and usable, and a first dataset of 100 successful robot episodes was generated from them (below). The robot replay of the single clip shown below timed out, so it is not representative of the generated set. SmolVLA fine-tuned on it reaches 2/10 closed-loop successes at the final checkpoint when started from `smolvla_base`, and 14/20 on held-out layouts when started from `lerobot/smolvla_libero` (see Planned experiment). What exists as a measurement: how the two public SmolVLA LIBERO checkpoints behave when the layout or the object size changes ([section 9](#9-results)). Details: [section 7](#7-status-and-todo).
 
 ![A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action](assets/episode_dashboard.gif)
 
@@ -276,9 +276,9 @@ Legend: ✅ done (the row says whether it ran on real clips or only on stand-in 
 | Retargeting | `ObjectCentricRetargeter`, fixed top-down orientation, robot from the home pose | ✅ ran on 12 real clips (59 % of rollouts succeed, see generation); first built on made-up hand paths ([D-010](docs/design_decisions.md)) |
 | Retargeting | Tune grasp height and offset once | 🟡 success measured over 170 rollouts with default settings; nothing tuned |
 | Generation | `DemoGenerator` and `04_generate_dataset.py` (success only, one process) | ✅ first run on 12 cleaned real clips: 100 successes of 170 attempts (59 %); multiprocess not done |
-| Generation | MimicGen-style expansion (`22_mimicgen_expand.py`: nearest-layout sources, action noise, step limit) | 🟡 built and tested; its runs are not part of the 100-episode dataset and no result is claimed here |
+| Generation | MimicGen-style expansion (`22_mimicgen_expand.py`: source screening, nearest-layout sources, action noise, 300-step filter) | 🟡 built; on 7 usable clips it gives 72 to 80 % usable episodes against 15 to 21 % for the default ([optimization potential](#optimization-potential-faster-demo-generation), [D-013](docs/design_decisions.md)); not used for the 100-episode training set, and no policy has been trained on it |
 | Training | SmolVLA expert-only fine-tune, 3000 steps, batch 16 (`19_train_smolvla.py`, D-013); ACT fallback not done | 🟡 one run, one seed |
-| Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | 🟡 checkpoints evaluated with N = 10 (`23_eval_checkpoints.py`); comparison with the pretrained checkpoints on held-out layouts started (notebook 14, no result here yet); N = 50 and the zero-shot and open-loop-replay baselines not run |
+| Evaluation | N = 50 with Wilson CI. Baselines: zero-shot, open-loop replay. `lerobot-eval` rebuilds the stock scene, so a loop through `ScaledNativeScene.reset` is needed | 🟡 checkpoints evaluated with N = 10 (`23_eval_checkpoints.py`); comparison with the pretrained checkpoints on 20 held-out layouts done (notebook 14, N = 20); N = 50 and the zero-shot and open-loop-replay baselines not run |
 | Figures | GIFs (episode dashboard, dataset and replay, scene orbit, generated clips in the slides), 3D trajectory plot, data-multiplier curve, one failure case | 🟡 GIFs done; the plot, curve and failure case are not |
 | Stretch | Splat scan of the real bowl, plate and table. Composited frames. Collision mesh. | 🟡 pipeline built. Real scans of the bowl, the plate and the whole table scene exist (metric ChArUco frame for the scene, [D-009](docs/design_decisions.md); lowered SIFT threshold and floor-based crop, [D-001, D-004](docs/design_decisions.md)), and the scanned bowl and plate are composited into LIBERO ([gallery](#what-the-splat-route-has-produced-so-far)). The plate has gaps; the filled version uses a shape prior. One scene, two clips each. The scene splat is not in LIBERO yet, and the collision mesh is not wired into the experiment. |
 | Stretch | Second camera view for stereo, only if monocular depth fails | ⬜ |
@@ -305,10 +305,11 @@ The notebooks are in [examples/](examples/). Each notebook runs from top to bott
 | [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) | SmolVLA benchmark in LIBERO: the two most-liked LIBERO checkpoints in three scene conditions (stock, cleared table, cleared table with real-size bowl and plate), success with Wilson intervals, how far episodes got, open-loop action error, rollout videos. |
 | [10_clip_cleaning](examples/10_clip_cleaning.ipynb) | Cleaning real phone clips before extraction: per-frame filters (no hand, two hands, bad fit, image edge, depth), the cut to one open-close-open cycle, clip filters, the per-clip timeline and the proposed `cuts.json`. Real clips, not committed. |
 | [11_recorded_dataset_and_replay](examples/11_recorded_dataset_and_replay.ipynb) | One cleaned real clip end to end: overlay video, LeRobot episode dashboard, interactive TCP and aperture, the human's bowl and plate layout in the sim, robot replay in the scaled LIBERO scene, dataset and replay side by side. Real clip, not committed. |
+| [12_mimicgen_expansion](examples/12_mimicgen_expansion.ipynb) | Alternative demo generation (MimicGen-style) against the default `DemoGenerator` on the same layouts: source choice, screening, action noise, step filter; the longer runs behind the optimization-potential result. |
 | [13_smolvla_checkpoints](examples/13_smolvla_checkpoints.ipynb) | SmolVLA fine-tuned on the generated dataset, evaluated at every saved checkpoint: closed-loop success (Wilson intervals, failure reasons), open-loop action error on training frames, training loss, rollout videos. |
 | [14_smolvla_model_comparison](examples/14_smolvla_model_comparison.ipynb) | Our fine-tuned policies against the two pretrained LIBERO checkpoints on the same scaled scene and held-out layouts. |
 
-Notebooks 01 to 05 and 08 use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). Notebooks 06, 10 and 11 read real phone clips (not committed); 09, 13 and 14 read benchmark and evaluation results, 13 and 14 for the policy trained on the generated data. Each notebook states this in its introduction.
+Notebooks 01 to 05 and 08 use **stand-in data** (dummy scans, a stand-in hand clip with synthetic markers). Notebooks 06, 10, 11 and 12 read real phone clips (not committed); 09, 13 and 14 read benchmark and evaluation results, 13 and 14 for the policy trained on the generated data. Each notebook states this in its introduction.
 
 ```bash
 uv run jupyter lab examples/
@@ -342,7 +343,7 @@ First result for a policy trained on my data, below, and the rest of the planned
 | `smolvla_base` zero-shot | nothing from LIBERO | pending |
 | Open-loop retarget replay | one human demo for each rollout, no learning | pending |
 | **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
-| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | running, no result yet (see below) |
+| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | Per checkpoint (500 to 3000): 2, 1, 7, 5, 8, 7 of 10; best step 2500 at 8/10. On 20 held-out layouts: 14/20 (95% CI 48 to 85%), against 3/20 for the `smolvla_base` init (see below) |
 | ACT (ours) | same data | pending |
 
 This table will contain only numbers from runs that were executed. Failed runs are included.
@@ -351,7 +352,18 @@ This table will contain only numbers from runs that were executed. Failed runs a
 
 Everything else matches the first run so the two are comparable: the same 100 generated episodes, expert-only training (vision encoder frozen), batch 16, 3000 steps, one seed. The run is started with `scripts/19_train_smolvla.py ... --init-from lerobot/smolvla_libero` and each checkpoint is evaluated with `23_eval_checkpoints.py` (10 episodes, layouts 0 to 9). The best checkpoint of each run is then compared on held-out layouts (100 and up) against the two pretrained checkpoints in [notebook 14](examples/14_smolvla_model_comparison.ipynb).
 
-Status: training and evaluation are still running, so there are no results yet. Limits: one seed and a small N, so the two starting points can only be told apart if their Wilson intervals separate. The best checkpoint is picked on the layouts it is first evaluated on, which is why the held-out comparison exists.
+**Result (held-out layouts 100 to 119, 20 episodes each, scaled scene, best checkpoint of each run at step 2500):**
+
+| Policy | Closed-loop success | 95% Wilson CI | Open-loop position error (all-zero chunk: 0.137) | Gripper sign accuracy |
+|---|---|---|---|---|
+| ours, `smolvla_libero` init | 14/20 (70%) | 48 to 85% | 0.075 | 0.969 |
+| ours, `smolvla_base` init | 3/20 (15%) | 5 to 36% | 0.087 | 0.963 |
+| `lerobot/smolvla_libero` | 0/20 | 0 to 16% | 0.343 | 0.419 |
+| `HuggingFaceVLA/smolvla_libero` | 0/20 | 0 to 16% | 0.266 | 0.410 |
+
+The `smolvla_libero` init beats the `smolvla_base` init, and the two intervals do not overlap. Both fine-tunes beat the pretrained checkpoints in this scene, which they were never trained for. The pretrained policies' open-loop error says how far they are from our demonstrations, not how good they are. Source: [notebook 14](examples/14_smolvla_model_comparison.ipynb), `results/smolvla_compare/`, `results/smolvla_libero_init_ckpts/`.
+
+Limits: one seed per run and N = 20. The best checkpoint was picked on layouts 0 to 9 and tested on layouts 100 to 119, so the 14/20 is not a selection artefact, but it is one seed and the layouts are random draws from the same generator as the training data. No zero-shot `smolvla_base` or open-loop replay baseline has been run, so the data's own contribution is still not isolated. The best checkpoint is picked on the layouts it is first evaluated on, which is why the held-out comparison exists.
 
 **Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit), with the same 10 layouts for every checkpoint and one training seed.
 
@@ -361,6 +373,25 @@ Status: training and evaluation are still running, so there are no results yet. 
 - **Caveats:** the two public checkpoints scored 0/10 in the same kind of scene (section 9, row 5), but in a separate, unpaired evaluation. The training set includes 5 clips with the release-distance QC gate waived (7 passed). No zero-shot or open-loop replay baseline has been run, so the data's contribution is not isolated.
 
 Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
+
+### Optimization potential: faster demo generation
+
+The 100-episode training set was made with the default `scripts/04_generate_dataset.py` (uniform source, speed `action_limit` 0.5, no length filter). An alternative, `scripts/22_mimicgen_expand.py`, was built afterwards but has not produced any training data. On the 7 usable clips of one session, the same layouts, and the evaluation's 300-step limit:
+
+| | Default (`scripts/04`) | MimicGen-style, screened (best run) |
+|---|---|---|
+| Episodes LIBERO accepts | 38 to 47 per 100 to 120 attempts | 100 of 125 attempts (80 %) |
+| Of those, within 300 steps | 18 to 21 (15 to 21 % of attempts) | all 100 |
+| Median length | 234 to 319 steps | 206 steps |
+
+| Pros | Cons |
+|---|---|
+| About 4 times more usable episodes per attempt, so a 100-episode set needs far fewer rollouts | Most of the gain comes from three simple changes (dropping sources that never succeed, speed 0.8, dropping episodes over 300 steps), not from the MimicGen ideas. Nearest-neighbour choice and action noise are within sampling noise (64 to 72 % at n = 100) |
+| Every kept episode fits the 300-step evaluation; the default keeps many that are too long to evaluate | The control is missing: the default with the same three changes was not run |
+| Three of the seven clips never succeed (0 of 6 in screening); the default keeps drawing them | Screening uses 6 layouts per clip, so a clip can flip in or out (one clip had 4 of 6, then 1 of 6) |
+| Noise and source mixing could add variety to the data | Faster motion changes the demonstrations; whether noise or mixing helps the trained policy is not measured, because nothing was trained on it |
+
+Limits: 7 clips from one session, one object pair, one seed per row (the best run uses a different seed from the others). The default's 59 % in the status table is on 12 clips and is not comparable with these numbers. Not added to the training set. Source: [12_mimicgen_expansion](examples/12_mimicgen_expansion.ipynb), [D-013](docs/design_decisions.md).
 
 ---
 
