@@ -8,7 +8,7 @@ The robot is not teleoperated. The simulated table is a copy of the real table, 
 
 **Concept.** The video is a motion-capture device. Markers and a hand tracker turn each clip into a table-frame hand path. The path is retargeted to many simulated object poses, and only successful runs become training data. SmolVLA never sees a real pixel (section 3, solution 4). A digital twin and Gaussian-splat scans of the real scene are added for visuals.
 
-**Where it stands.** 12 of 26 recorded clips were cleaned and usable. They gave 100 successful robot episodes (below). SmolVLA fine-tuned on them reaches 14/20 on held-out layouts when started from `lerobot/smolvla_libero` and 3/20 when started from `smolvla_base`; the pretrained checkpoints get 0/20 ([section 9](#9-results)). One seed, N = 20, no baselines yet. Full list: [section 7](#7-status-and-todo).
+**Where it stands.** 12 of 26 recorded clips were cleaned and usable. They gave 100 successful robot episodes (below). SmolVLA fine-tuned on them reaches 14/20 on held-out layouts when started from `lerobot/smolvla_libero` and 3/20 when started from `smolvla_base`; the pretrained checkpoints get 0/20 ([section 4](#4-results)). One seed, N = 20, no baselines yet. Full list: [section 9](#9-status-and-todo).
 
 <p align="center">
   <img src="assets/episode_dashboard.gif" alt="A recorded human demo as a LeRobot episode: markers, hand skeleton, TCP path, pinch aperture, state and action">
@@ -132,6 +132,65 @@ Select ready LIBERO objects (bowl, plate). Find real objects with the same size.
 
 The baseline avoids the visual domain gap. It does not close the gap. Splat-based real2sim reduces the visual gap for illustration. A real-robot validation is outside this challenge.
 
+## 4. Results
+
+### Pretrained SmolVLA checkpoints in five scenes
+
+No training by me. The two most-liked LIBERO checkpoints on the Hub drive the Panda in the simulator; success is LIBERO's own check. Same layouts for both checkpoints, 300 steps, new action chunk every 10 steps, 10 episodes per cell (one cell has 8). Source: [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) and [D-011](docs/design_decisions.md).
+
+<p align="center">
+  <img src="assets/results_pretrained_scenes.png" width="70%" alt="Bar chart: successes of 10 episodes for the two pretrained checkpoints in five scenes">
+</p>
+
+1. **Stock:** LIBERO's own scene and start positions.
+2. **Cleared, LIBERO layout:** other objects removed; bowl and plate start where LIBERO puts them.
+3. **Cleared, new layout:** other objects removed; bowl and plate at random positions.
+4. **Real size, LIBERO layout:** bowl and plate at the measured real sizes (plate 1.86x wider); LIBERO's placement. HuggingFaceVLA has 8 episodes here.
+5. **Real size, new layout:** real sizes at random positions, the target scene of my experiment.
+
+Reading: the success of both checkpoints depends strongly on where the objects start and on their size. A new layout alone takes the better checkpoint from 6/10 to 0/10, and real-size objects give 0 even on LIBERO's own layout. Removing the other objects already lowers success (scene 1 to 2). With 10 episodes per cell the 95% Wilson interval of 0/10 is 0 to 28%, so small differences mean nothing. The cause is not established: candidates not yet tested are the fixed start positions the checkpoints saw in training and the removed distractors. This is why the question above is open: a policy trained on one fixed layout does not carry over to a new layout or a new object, and whether human video fixes that is what the experiment below is for.
+
+### Planned experiment
+
+Target task, N = 50 episodes, Wilson 95% CI. Only the two SmolVLA rows have been run, with 10 episodes instead of 50:
+
+| Policy | Trained on | Success |
+|---|---|---|
+| `smolvla_base` zero-shot | nothing from LIBERO | pending |
+| Open-loop retarget replay | one human demo for each rollout, no learning | pending |
+| **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
+| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | Per checkpoint (500 to 3000): 2, 1, 7, 5, 8, 7 of 10; best step 2500 at 8/10. Held-out result below |
+| ACT (ours) | same data | pending |
+
+This table will contain only numbers from runs that were executed. Failed runs are included.
+
+**Second experiment: start from `lerobot/smolvla_libero`.** The first fine-tune starts from `smolvla_base`, which has never seen LIBERO. The second starts from `lerobot/smolvla_libero`, which was trained on LIBERO's own demonstrations: it succeeds 10/10 on the stock scene but 0/10 in the scaled scene (section 4, scene 5). The question is whether that prior helps once the policy is fine-tuned on demonstrations generated from my 12 clips, or gets in the way.
+
+Everything else matches the first run so the two are comparable: the same 100 generated episodes, expert-only training (vision encoder frozen), batch 16, 3000 steps, one seed. The run is started with `scripts/19_train_smolvla.py ... --init-from lerobot/smolvla_libero` and each checkpoint is evaluated with `23_eval_checkpoints.py` (10 episodes, layouts 0 to 9). The best checkpoint of each run is then compared on held-out layouts (100 and up) against the two pretrained checkpoints in [notebook 14](examples/14_smolvla_model_comparison.ipynb).
+
+**Result (held-out layouts 100 to 119, 20 episodes each, scaled scene, best checkpoint of each run at step 2500):**
+
+<p align="center">
+  <img src="assets/results_held_out.png" width="70%" alt="Bar chart: successes of 20 held-out layouts for our two fine-tunes and the two pretrained checkpoints">
+</p>
+
+The `smolvla_libero` init beats the `smolvla_base` init, and the two intervals do not overlap. Both fine-tunes beat the pretrained checkpoints in this scene, which they were never trained for. The pretrained policies' open-loop error says how far they are from our demonstrations, not how good they are. Source: [notebook 14](examples/14_smolvla_model_comparison.ipynb), `results/smolvla_compare/`, `results/smolvla_libero_init_ckpts/`.
+
+Limits: one seed per run and N = 20. The best checkpoint was picked on layouts 0 to 9 and tested on layouts 100 to 119, so the 14/20 is not a selection artefact, but it is one seed and the layouts are random draws from the same generator as the training data. No zero-shot `smolvla_base` or open-loop replay baseline has been run, so the data's own contribution is still not isolated. The best checkpoint is picked on the layouts it is first evaluated on, which is why the held-out comparison exists.
+
+**Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit), with the same 10 layouts for every checkpoint and one training seed.
+
+- **Success:** step 2500 is best at 4/10 (interval 17 to 69%); the final checkpoint is 2/10. All intervals overlap, so the six checkpoints cannot be told apart.
+- **Failures:** most runs never bring the gripper within 6 cm of the bowl (6 to 9 of 10 at every checkpoint).
+- **Open loop:** position error on training frames falls from 0.113 to 0.084 (an all-zero chunk scores 0.137), and gripper sign accuracy rises from 0.92 to 0.96. This measures fit on frames the model was trained on, not generalisation.
+- **Caveats:** the two public checkpoints scored 0/10 in the same kind of scene (section 4, row 5), but in a separate, unpaired evaluation. The training set includes 5 clips with the release-distance QC gate waived (7 passed). No zero-shot or open-loop replay baseline has been run, so the data's contribution is not isolated.
+
+Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
+
+---
+
+## 5. Extensions: splat scans and faster demo generation
+
 ### What the splat route has produced so far
 
 All of this comes from my own phone clips of one table, one bowl and one plate. It is for looks only: it does not train or evaluate a policy. Scan details and limits: [D-001 to D-009 in the design log](docs/design_decisions.md).
@@ -167,9 +226,28 @@ The same view as the whole scene, cut to the two objects. The brown halo under t
 
 Reproduce: [01_splats_and_scans](examples/01_splats_and_scans.ipynb), part 3 (needs `data/splats/` and `data/scans/` from `scripts/09_scan_object.py` and `scripts/15_scan_clips.py`, and a GPU).
 
+### Optimization potential: faster demo generation
+
+The 100-episode training set was made with the default `scripts/04_generate_dataset.py` (uniform source, speed `action_limit` 0.5, no length filter). An alternative, `scripts/22_mimicgen_expand.py`, was built afterwards but has not produced any training data. On the 7 usable clips of one session, the same layouts, and the evaluation's 300-step limit:
+
+| | Default (`scripts/04`) | MimicGen-style, screened (best run) |
+|---|---|---|
+| Episodes LIBERO accepts | 38 to 47 per 100 to 120 attempts | 100 of 125 attempts (80 %) |
+| Of those, within 300 steps | 18 to 21 (15 to 21 % of attempts) | all 100 |
+| Median length | 234 to 319 steps | 206 steps |
+
+| Pros | Cons |
+|---|---|
+| About 4 times more usable episodes per attempt, so a 100-episode set needs far fewer rollouts | Most of the gain comes from three simple changes (dropping sources that never succeed, speed 0.8, dropping episodes over 300 steps), not from the MimicGen ideas. Nearest-neighbour choice and action noise are within sampling noise (64 to 72 % at n = 100) |
+| Every kept episode fits the 300-step evaluation; the default keeps many that are too long to evaluate | The control is missing: the default with the same three changes was not run |
+| Three of the seven clips never succeed (0 of 6 in screening); the default keeps drawing them | Screening uses 6 layouts per clip, so a clip can flip in or out (one clip had 4 of 6, then 1 of 6) |
+| Noise and source mixing could add variety to the data | Faster motion changes the demonstrations; whether noise or mixing helps the trained policy is not measured, because nothing was trained on it |
+
+Limits: 7 clips from one session, one object pair, one seed per row (the best run uses a different seed from the others). The default's 59 % in the status table is on 12 clips and is not comparable with these numbers. Not added to the training set. Source: [12_mimicgen_expansion](examples/12_mimicgen_expansion.ipynb), [D-013](docs/design_decisions.md).
+
 ---
 
-## 4. Frameworks and models
+## 6. Frameworks and models
 
 | Component | Choice | Reason |
 |---|---|---|
@@ -185,13 +263,13 @@ Reproduce: [01_splats_and_scans](examples/01_splats_and_scans.ipynb), part 3 (ne
 | Collision geometry | **open3d** and **CoACD** | They convert a splat to a surface mesh and convex pieces. Scanned objects then have a solid body. |
 | Tooling | **uv**, **ruff**, **pytest**, Jupyter and **plotly** | Reproducible environment, formatting and lint, tests, interactive 3D views. |
 
-Related work (full citations in [section 10](#10-references)): MimicGen [4] (used as a concept), HaWoR [5] (considered and not used, because the camera is fixed), NovaFlow [6], Video2Sim2Real [7], Phantom [8], PolaRiS [9] and RoboGSim [10] (human-video and real2sim ideas, not used as code).
+Related work (full citations in [section 11](#11-references)): MimicGen [4] (used as a concept), HaWoR [5] (considered and not used, because the camera is fixed), NovaFlow [6], Video2Sim2Real [7], Phantom [8], PolaRiS [9] and RoboGSim [10] (human-video and real2sim ideas, not used as code).
 
 NovaFlow [6] is the closest in spirit and differs in the source of the motion. It turns a video made by a generative model into 3D object flow and executes that flow on a robot without any training. This project uses a real video of a human hand, retargets the hand path to many simulated object poses, and trains SmolVLA on the verified runs. I do not reuse NovaFlow's code or models, and I have not compared against it.
 
 ---
 
-## 5. Hardware and software setup
+## 7. Hardware and software setup
 
 **Capture hardware**
 
@@ -224,7 +302,7 @@ Notes:
 
 ---
 
-## 6. Workspace structure
+## 8. Workspace structure
 
 ```
 hurobo/
@@ -248,7 +326,7 @@ hurobo/
 │   ├── training.py, checkpoint_eval.py, model_comparison.py, policy_rollout.py, benchmark.py # SmolVLA fine-tune, per-checkpoint and cross-model evaluation
 │   └── utils/                        # transforms, signal, video, plotting, viewer, synthetic, notebook
 ├── scripts/                          # thin CLIs: NN_name.py
-├── examples/                         # one notebook for each capability (section 8)
+├── examples/                         # one notebook for each capability (section 10)
 ├── docs/                             # scanning_guide.md, camera_sources.md, design_decisions.md
 ├── tests/                            # pytest
 └── data/                             # not in git: raw clips, intrinsics, scans, splats, datasets
@@ -262,7 +340,7 @@ Rules for the code:
 
 ---
 
-## 7. Status and TODO
+## 9. Status and TODO
 
 Legend: ✅ done (the row says whether it ran on real clips or only on stand-in data), 🟡 partly done, ⬜ not started.
 
@@ -296,7 +374,7 @@ If time is short, cut in this order: splat stretch, robot overlay, SmolVLA (keep
 
 ---
 
-## 8. Notebooks
+## 10. Notebooks
 
 The notebooks are in [examples/](examples/). Each notebook runs from top to bottom and stores its outputs. Each notebook calls `src/hurobo` and contains no reusable logic.
 
@@ -326,92 +404,9 @@ MUJOCO_GL=egl uv run jupyter nbconvert --to notebook --execute --inplace example
 
 ---
 
-## 9. Results
+## 11. References
 
-### Pretrained SmolVLA checkpoints in five scenes
-
-No training by me. The two most-liked LIBERO checkpoints on the Hub drive the Panda in the simulator; success is LIBERO's own check. Same layouts for both checkpoints, 300 steps, new action chunk every 10 steps, 10 episodes per cell (one cell has 8). Source: [09_smolvla_benchmark](examples/09_smolvla_benchmark.ipynb) and [D-011](docs/design_decisions.md).
-
-<p align="center">
-  <img src="assets/results_pretrained_scenes.png" width="60%" alt="Bar chart: successes of 10 episodes for the two pretrained checkpoints in five scenes">
-</p>
-
-1. **Stock:** LIBERO's own scene and start positions.
-2. **Cleared, LIBERO layout:** other objects removed; bowl and plate start where LIBERO puts them.
-3. **Cleared, new layout:** other objects removed; bowl and plate at random positions.
-4. **Real size, LIBERO layout:** bowl and plate at the measured real sizes (plate 1.86x wider); LIBERO's placement. HuggingFaceVLA has 8 episodes here.
-5. **Real size, new layout:** real sizes at random positions, the target scene of my experiment.
-
-Reading: the success of both checkpoints depends strongly on where the objects start and on their size. A new layout alone takes the better checkpoint from 6/10 to 0/10, and real-size objects give 0 even on LIBERO's own layout. Removing the other objects already lowers success (scene 1 to 2). With 10 episodes per cell the 95% Wilson interval of 0/10 is 0 to 28%, so small differences mean nothing. The cause is not established: candidates not yet tested are the fixed start positions the checkpoints saw in training and the removed distractors. This is why the question above is open: a policy trained on one fixed layout does not carry over to a new layout or a new object, and whether human video fixes that is what the experiment below is for.
-
-### Planned experiment
-
-Target task, N = 50 episodes, Wilson 95% CI. Only the two SmolVLA rows have been run, with 10 episodes instead of 50:
-
-| Policy | Trained on | Success |
-|---|---|---|
-| `smolvla_base` zero-shot | nothing from LIBERO | pending |
-| Open-loop retarget replay | one human demo for each rollout, no learning | pending |
-| **SmolVLA (ours)**, final checkpoint (step 3000) | 100 generated episodes from 12 phone clips, expert-only fine-tune, 3000 steps | 2/10 (95% CI 6 to 51%); N = 10, not 50. Per checkpoint (500 to 3000): 0, 2, 1, 1, 4, 2 of 10 |
-| **SmolVLA (ours), `smolvla_libero` init** | the same 100 generated episodes, starting from the weights of `lerobot/smolvla_libero` instead of `smolvla_base`; same settings | Per checkpoint (500 to 3000): 2, 1, 7, 5, 8, 7 of 10; best step 2500 at 8/10. Held-out result below |
-| ACT (ours) | same data | pending |
-
-This table will contain only numbers from runs that were executed. Failed runs are included.
-
-**Second experiment: start from `lerobot/smolvla_libero`.** The first fine-tune starts from `smolvla_base`, which has never seen LIBERO. The second starts from `lerobot/smolvla_libero`, which was trained on LIBERO's own demonstrations: it succeeds 10/10 on the stock scene but 0/10 in the scaled scene (section 9, scene 5). The question is whether that prior helps once the policy is fine-tuned on demonstrations generated from my 12 clips, or gets in the way.
-
-Everything else matches the first run so the two are comparable: the same 100 generated episodes, expert-only training (vision encoder frozen), batch 16, 3000 steps, one seed. The run is started with `scripts/19_train_smolvla.py ... --init-from lerobot/smolvla_libero` and each checkpoint is evaluated with `23_eval_checkpoints.py` (10 episodes, layouts 0 to 9). The best checkpoint of each run is then compared on held-out layouts (100 and up) against the two pretrained checkpoints in [notebook 14](examples/14_smolvla_model_comparison.ipynb).
-
-**Result (held-out layouts 100 to 119, 20 episodes each, scaled scene, best checkpoint of each run at step 2500):**
-
-<p align="center">
-  <img src="assets/results_held_out.png" width="60%" alt="Bar chart: successes of 20 held-out layouts for our two fine-tunes and the two pretrained checkpoints">
-</p>
-
-| Policy | Closed-loop success | 95% Wilson CI | Open-loop position error (all-zero chunk: 0.137) | Gripper sign accuracy |
-|---|---|---|---|---|
-| ours, `smolvla_libero` init | 14/20 (70%) | 48 to 85% | 0.075 | 0.969 |
-| ours, `smolvla_base` init | 3/20 (15%) | 5 to 36% | 0.087 | 0.963 |
-| `lerobot/smolvla_libero` | 0/20 | 0 to 16% | 0.343 | 0.419 |
-| `HuggingFaceVLA/smolvla_libero` | 0/20 | 0 to 16% | 0.266 | 0.410 |
-
-The `smolvla_libero` init beats the `smolvla_base` init, and the two intervals do not overlap. Both fine-tunes beat the pretrained checkpoints in this scene, which they were never trained for. The pretrained policies' open-loop error says how far they are from our demonstrations, not how good they are. Source: [notebook 14](examples/14_smolvla_model_comparison.ipynb), `results/smolvla_compare/`, `results/smolvla_libero_init_ckpts/`.
-
-Limits: one seed per run and N = 20. The best checkpoint was picked on layouts 0 to 9 and tested on layouts 100 to 119, so the 14/20 is not a selection artefact, but it is one seed and the layouts are random draws from the same generator as the training data. No zero-shot `smolvla_base` or open-loop replay baseline has been run, so the data's own contribution is still not isolated. The best checkpoint is picked on the layouts it is first evaluated on, which is why the held-out comparison exists.
-
-**Reading the SmolVLA row.** Closed loop in the scaled scene (real-size bowl and plate, other objects removed, random layouts, 500-step limit), with the same 10 layouts for every checkpoint and one training seed.
-
-- **Success:** step 2500 is best at 4/10 (interval 17 to 69%); the final checkpoint is 2/10. All intervals overlap, so the six checkpoints cannot be told apart.
-- **Failures:** most runs never bring the gripper within 6 cm of the bowl (6 to 9 of 10 at every checkpoint).
-- **Open loop:** position error on training frames falls from 0.113 to 0.084 (an all-zero chunk scores 0.137), and gripper sign accuracy rises from 0.92 to 0.96. This measures fit on frames the model was trained on, not generalisation.
-- **Caveats:** the two public checkpoints scored 0/10 in the same kind of scene (section 9, row 5), but in a separate, unpaired evaluation. The training set includes 5 clips with the release-distance QC gate waived (7 passed). No zero-shot or open-loop replay baseline has been run, so the data's contribution is not isolated.
-
-Source: [notebook 13](examples/13_smolvla_checkpoints.ipynb), `results/smolvla_ckpts/`, [D-013](docs/design_decisions.md).
-
-### Optimization potential: faster demo generation
-
-The 100-episode training set was made with the default `scripts/04_generate_dataset.py` (uniform source, speed `action_limit` 0.5, no length filter). An alternative, `scripts/22_mimicgen_expand.py`, was built afterwards but has not produced any training data. On the 7 usable clips of one session, the same layouts, and the evaluation's 300-step limit:
-
-| | Default (`scripts/04`) | MimicGen-style, screened (best run) |
-|---|---|---|
-| Episodes LIBERO accepts | 38 to 47 per 100 to 120 attempts | 100 of 125 attempts (80 %) |
-| Of those, within 300 steps | 18 to 21 (15 to 21 % of attempts) | all 100 |
-| Median length | 234 to 319 steps | 206 steps |
-
-| Pros | Cons |
-|---|---|
-| About 4 times more usable episodes per attempt, so a 100-episode set needs far fewer rollouts | Most of the gain comes from three simple changes (dropping sources that never succeed, speed 0.8, dropping episodes over 300 steps), not from the MimicGen ideas. Nearest-neighbour choice and action noise are within sampling noise (64 to 72 % at n = 100) |
-| Every kept episode fits the 300-step evaluation; the default keeps many that are too long to evaluate | The control is missing: the default with the same three changes was not run |
-| Three of the seven clips never succeed (0 of 6 in screening); the default keeps drawing them | Screening uses 6 layouts per clip, so a clip can flip in or out (one clip had 4 of 6, then 1 of 6) |
-| Noise and source mixing could add variety to the data | Faster motion changes the demonstrations; whether noise or mixing helps the trained policy is not measured, because nothing was trained on it |
-
-Limits: 7 clips from one session, one object pair, one seed per row (the best run uses a different seed from the others). The default's 59 % in the status table is on 12 clips and is not comparable with these numbers. Not added to the training set. Source: [12_mimicgen_expansion](examples/12_mimicgen_expansion.ipynb), [D-013](docs/design_decisions.md).
-
----
-
-## 10. References
-
-Papers behind the components and related work in section 4. The status of each (as-is, configured, modified, rejected) is in the [design log](docs/design_decisions.md). Software without a paper is listed under "Software".
+Papers behind the components and related work in section 6. The status of each (as-is, configured, modified, rejected) is in the [design log](docs/design_decisions.md). Software without a paper is listed under "Software".
 
 ### Related work
 
