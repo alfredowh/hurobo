@@ -4,7 +4,7 @@ What we reuse from existing work, with which settings, and where we changed it a
 rule for keeping this file current is in [CLAUDE.md](../CLAUDE.md) ("Design decisions log").
 
 How this relates to the other documents: [PLAN.md](../PLAN.md) §2 holds the up-front research verdicts (which
-framework, model and simulator to use). [README.md](../README.md) §4 lists the components. This file records what
+framework, model and simulator to use). [frameworks_and_references.md](frameworks_and_references.md) lists the components. This file records what
 happened **after** that: defaults that did not work on our data, and what we did about it.
 
 ## Status words
